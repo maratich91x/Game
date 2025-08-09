@@ -192,6 +192,25 @@ def text_with_outline(text, font, main=(255,255,255), outline=(0,0,0), shift=1):
     surf.blit(base, (shift, shift))
     return surf
 
+
+def wrap_text(text, font, max_width):
+    lines = []
+    for raw_line in text.splitlines():
+        words = raw_line.split()
+        if not words:
+            lines.append("")
+            continue
+        current = words[0]
+        for w in words[1:]:
+            test = current + " " + w
+            if font.size(test)[0] <= max_width:
+                current = test
+            else:
+                lines.append(current)
+                current = w
+        lines.append(current)
+    return lines
+
 # ====== PARTICLES ======
 class Particle:
     def __init__(self, pos, vel, life, size, color):
@@ -344,8 +363,14 @@ class NPC:
         self.talked = False
 
     def draw(self, surf):
-        pygame.draw.rect(surf, (200, 180, 120), self.rect)
-        surf.blit(font_small.render("?", True, (0, 0, 0)), (self.rect.x + 9, self.rect.y + 4))
+        body = pygame.Rect(self.rect.x, self.rect.y + 12, self.rect.w, self.rect.h - 12)
+        pygame.draw.rect(surf, (200, 170, 110), body, border_radius=6)
+        head_center = (self.rect.centerx, self.rect.y + 12)
+        pygame.draw.circle(surf, (240, 220, 170), head_center, 12)
+        pygame.draw.circle(surf, (0, 0, 0), (head_center[0] - 4, head_center[1] - 3), 2)
+        pygame.draw.circle(surf, (0, 0, 0), (head_center[0] + 4, head_center[1] - 3), 2)
+        if not self.talked:
+            surf.blit(font_small.render("!", True, (255, 255, 255)), (self.rect.x + 12, self.rect.y - 18))
 
 # ====== SAVE / LOAD ======
 SAVE_PATH = os.path.join(BASE_DIR, "save.json")
@@ -852,28 +877,37 @@ def draw_hp_bar_above(surface, sprite_rect, hp, hp_max, is_boss=False):
     surface.blit(grad, (x,y))
 
 def draw_minimap(surf, current_room, piz_room):
-    map_rect = pygame.Rect(WIDTH-280, 12, 268, 220)
+    map_rect = pygame.Rect(WIDTH - 280, 12, 268, 220)
     hud_panel(surf, map_rect)
-    surf.blit(font_small.render("Карта", True, (230,230,240)), (map_rect.x+8, map_rect.y+6))
-    rooms = list(ROOMS.keys()); cols = 3
+    surf.blit(font_small.render("Карта", True, (230, 230, 240)), (map_rect.x + 8, map_rect.y + 6))
+    rooms = list(ROOMS.keys())
+    cols = 3
     spacing_x, spacing_y = 80, 60
-    start_x, start_y = map_rect.x+24, map_rect.y+34
+    size = 36
+    start_x, start_y = map_rect.x + 24, map_rect.y + 40
     positions = {}
     for idx, r in enumerate(rooms):
-        cx = idx % cols; cy = idx // cols
-        x = start_x + cx * spacing_x; y = start_y + cy * spacing_y
-        positions[r] = (x,y)
+        cx = idx % cols
+        cy = idx // cols
+        x = start_x + cx * spacing_x
+        y = start_y + cy * spacing_y
+        positions[r] = (x, y)
     for r, ns in ROOMS.items():
-        x,y = positions[r]
+        x, y = positions[r]
         for nb in ns:
             nx, ny = positions[nb]
-            pygame.draw.line(surf, (130,130,150), (x,y), (nx,ny), 1)
-    for r, (x,y) in positions.items():
-        col = (130,130,150)
-        if r == current_room: col = (240,240,80)
-        elif r == piz_room: col = (220,90,90)
-        pygame.draw.circle(surf, col, (x,y), 7)
-        surf.blit(font_small.render(str(rooms.index(r)+1), True, (230,230,240)), (x-5,y-10))
+            pygame.draw.line(surf, (100, 100, 120), (x + size // 2, y + size // 2), (nx + size // 2, ny + size // 2), 2)
+    for r, (x, y) in positions.items():
+        rect = pygame.Rect(x, y, size, size)
+        col = (60, 60, 70)
+        if r == current_room:
+            col = (240, 240, 80)
+        elif r == piz_room:
+            col = (220, 90, 90)
+        pygame.draw.rect(surf, col, rect, border_radius=4)
+        pygame.draw.rect(surf, (230, 230, 240), rect, 2, border_radius=4)
+        num = font_small.render(str(rooms.index(r) + 1), True, (0, 0, 0))
+        surf.blit(num, (rect.x + rect.w // 2 - num.get_width() // 2, rect.y + rect.h // 2 - num.get_height() // 2))
 
 def draw_notes_log(surf, notes_log):
     rect = pygame.Rect(WIDTH//2-360, 90, 720, HEIGHT-180)
@@ -881,13 +915,16 @@ def draw_notes_log(surf, notes_log):
     title = text_with_outline("Журнал улик (TAB)", font_big, (240,240,255), (0,0,0))
     surf.blit(title, (rect.x+16, rect.y+12))
     y = rect.y + 60
+    line_h = font_small.get_height() + 6
     if not notes_log:
         surf.blit(font_mid.render("Пока нет улик. Ищи записки ✉ в комнатах.", True, (220,220,230)), (rect.x+16, y))
     else:
-        for i, t in enumerate(notes_log[-12:]):
-            txt = font_small.render("• " + t, True, (230,230,240))
-            surf.blit(txt, (rect.x+16, y))
-            y += 26
+        for t in notes_log[-12:]:
+            lines = wrap_text("• " + t, font_small, rect.width - 32)
+            for line in lines:
+                txt = font_small.render(line, True, (230,230,240))
+                surf.blit(txt, (rect.x+16, y))
+                y += line_h
 
 def draw_rage_bar(surface, player):
     label = text_with_outline("Rage", font_small, (245,240,255), (0,0,0))
@@ -1225,7 +1262,10 @@ class Game:
         if self.state == "dialogue" and self.dialogue:
             rect = pygame.Rect(WIDTH//2-300, HEIGHT-180, 600, 140)
             hud_panel(surf, rect)
-            surf.blit(font_mid.render(self.dialogue.current(), True, (240,240,255)), (rect.x+16, rect.y+16))
+            lines = wrap_text(self.dialogue.current(), font_mid, rect.width - 32)
+            for i, line in enumerate(lines):
+                txt = font_mid.render(line, True, (240,240,255))
+                surf.blit(txt, (rect.x+16, rect.y+16 + i * (font_mid.get_height() + 4)))
 
         # Flash
         a = flash_overlay.get_alpha()
