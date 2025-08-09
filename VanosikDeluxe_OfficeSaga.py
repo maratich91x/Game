@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, asdict
 from pygame import Vector2
 
 # ====== GAME SETTINGS ======
-WIDTH, HEIGHT = 1024, 640
+WIDTH, HEIGHT = 1280, 800
 FPS = 60
 
 # Combat / RPG (из "Deluxe")
@@ -59,6 +59,7 @@ BOSS_COLOR = (255, 90, 40)
 MOVE_DELAY = 42.0       # через сколько сек Пиздюк переезжает
 NOTE_SPAWN_CHANCE = 0.85
 ROOM_W, ROOM_H = WIDTH, HEIGHT
+ACTION_DELAY = 0.35     # задержка между действиями (E)
 
 # Colors
 UI_TEXT = (28, 30, 38)
@@ -975,13 +976,16 @@ def draw_skill_tree(surface, tree):
 
 # ====== Story / Intro ======
 INTRO_TEXT = [
-    "У Ваносика появился помощник — Пиздюк.",
-    "Сначала Ваносик обрадовался: наконец-то помощь!",
-    "Но быстро понял: Пиздюк ничего не хочет делать...",
-    "Он всё время где-то проябывается и косит от работы.",
-    "Ваносик терпел, терпел...",
-    "Но терпению пришёл КОНЕЦ.",
-    "Ваносик пошёл искать Пиздюка, чтобы его ОТПИЗДИТЬ!!!"
+    "Когда Ваносик устроился в офис, ему подсунули помощника — Пиздюка.",
+    "Сначала казалось, что это шанс: кто-то будет таскать папки и варить кофе.",
+    "Но Пиздюк умел лишь исчезать в самый ответственный момент.",
+    "То он в курилке, то в туалете зависает, то вообще читает мемы на крыше.",
+    "Ваносик закрывал глаза на проделки, пока дедлайны не начали гореть.",
+    "Однажды Пиздюк пропал, прихватив важные отчёты, и офис погрузился в хаос.",
+    "Терпение лопнуло: началась охота.",
+    "Говорят, Пиздюк прячется в закоулках и оставляет ехидные записки.",
+    "Ваносик наточил степлер и пошёл по следу лентяя.",
+    "Найти Пиздюка и ОТПИЗДИТЬ — теперь это дело чести!"
 ]
 
 def show_intro():
@@ -1051,6 +1055,7 @@ class Game:
         self.quests = []
         self.dialogue = None
         self.current_npc = None
+        self.action_cd = 0.0
         sword = Item("Степлер-меч", "weapon", damage=2)
         self.player.inventory.add(sword)
         self.player.inventory.equip(sword)
@@ -1099,6 +1104,7 @@ class Game:
             self.scene.notes.append(Note(pos, f"Меня тут нет! Пойду-ка в {self.piz_room}."))
 
     def update(self, dt, keys):
+        self.action_cd = max(0.0, self.action_cd - dt)
         for e in pygame.event.get():
             if e.type == pygame.QUIT: pygame.quit(); sys.exit(0)
             elif e.type == pygame.KEYDOWN:
@@ -1144,25 +1150,35 @@ class Game:
         if self.state == "explore":
             self.player.update(dt, keys)
             # взаимодействие — двери/улики/NPC
-            if keys[pygame.K_e]:
+            if keys[pygame.K_e] and self.action_cd <= 0:
+                acted = False
                 for d in self.scene.doors:
                     if self.player.rect.colliderect(d.rect):
-                        self.enter_room(d.target); break
-                for n in self.scene.notes:
-                    if not n.picked and self.player.rect.colliderect(n.rect):
-                        n.picked = True
-                        self.notes_log.append(n.text)
-                        self.quests.append(Quest(n.text))
-                        self.dialogue = Dialogue([n.text])
-                        self.state = "dialogue"
-                        self.toast_show("Улика подобрана (TAB — журнал)")
-                for npc in self.scene.npcs:
-                    if not npc.talked and self.player.rect.colliderect(npc.rect):
-                        self.dialogue = Dialogue(npc.dialogue_lines)
-                        self.state = "dialogue"
-                        self.current_npc = npc
-                        self.toast_show("Разговор")
+                        self.enter_room(d.target)
+                        acted = True
                         break
+                if not acted:
+                    for n in self.scene.notes:
+                        if not n.picked and self.player.rect.colliderect(n.rect):
+                            n.picked = True
+                            self.notes_log.append(n.text)
+                            self.quests.append(Quest(n.text))
+                            self.dialogue = Dialogue([n.text])
+                            self.state = "dialogue"
+                            self.toast_show("Улика подобрана (TAB — журнал)")
+                            acted = True
+                            break
+                if not acted:
+                    for npc in self.scene.npcs:
+                        if not npc.talked and self.player.rect.colliderect(npc.rect):
+                            self.dialogue = Dialogue(npc.dialogue_lines)
+                            self.state = "dialogue"
+                            self.current_npc = npc
+                            self.toast_show("Разговор")
+                            acted = True
+                            break
+                if acted:
+                    self.action_cd = ACTION_DELAY
             # переезд Пиздюка
             self.piz_move_t -= dt
             if self.piz_move_t <= 0:
