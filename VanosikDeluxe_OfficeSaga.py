@@ -259,6 +259,165 @@ class ParticleSystem:
         for p in self.items:
             p.render(surface)
 
+# ====== SIMPLE RPG SYSTEMS ======
+# Эти классы минимально расширяют оригинальную игру, добавляя
+# инвентарь, навыки и квесты. Реализация остаётся базовой и
+# служит заготовкой для дальнейшего развития.
+
+class Item:
+    """Простой предмет инвентаря."""
+    def __init__(self, name, itype="misc", damage=0, speed=0):
+        self.name = name
+        self.type = itype
+        self.damage = damage
+        self.speed = speed
+
+
+class Inventory:
+    def __init__(self):
+        self.items = []
+        self.equipped = {}
+
+    def add(self, item: Item):
+        self.items.append(item)
+
+    def equip(self, item: Item):
+        self.equipped[item.type] = item
+
+    def bonus_damage(self):
+        return sum(i.damage for i in self.equipped.values())
+
+    def bonus_speed(self):
+        return sum(i.speed for i in self.equipped.values())
+
+
+class Skill:
+    def __init__(self, name, cost=1):
+        self.name = name
+        self.cost = cost
+        self.unlocked = False
+
+
+class SkillTree:
+    def __init__(self):
+        self.skills = {
+            "damage": Skill("Урон", cost=1),
+            "speed": Skill("Скорость", cost=1),
+            "cooldown": Skill("Перезарядка", cost=1),
+            "range": Skill("Дальность", cost=1),
+        }
+
+    def unlock(self, key, player):
+        sk = self.skills.get(key)
+        if sk and not sk.unlocked and player.skill_points >= sk.cost:
+            sk.unlocked = True
+            player.skill_points -= sk.cost
+            if key == "damage":
+                player.damage_bonus += 1
+            elif key == "speed":
+                player.speed_bonus += 1; player.recompute_stats()
+            elif key == "cooldown":
+                player.cd_bonus += 1.0
+            elif key == "range":
+                player.range_bonus += 1
+
+
+class Quest:
+    def __init__(self, desc):
+        self.desc = desc
+        self.completed = False
+
+
+class Dialogue:
+    def __init__(self, lines):
+        self.lines = lines
+        self.idx = 0
+
+    def current(self):
+        if self.idx < len(self.lines):
+            return self.lines[self.idx]
+        return ""
+
+    def next(self):
+        if self.idx < len(self.lines) - 1:
+            self.idx += 1
+            return True
+        return False
+
+# ====== SAVE / LOAD ======
+SAVE_PATH = os.path.join(BASE_DIR, "save.json")
+
+
+def save_game(game):
+    data = {
+        "level": game.player.level,
+        "xp": game.player.xp,
+        "xp_next": game.player.xp_next,
+        "skill_points": game.player.skill_points,
+        "damage_bonus": game.player.damage_bonus,
+        "speed_bonus": game.player.speed_bonus,
+        "cd_bonus": game.player.cd_bonus,
+        "range_bonus": game.player.range_bonus,
+        "inventory": [i.__dict__ for i in game.player.inventory.items],
+        "equipped": {k: v.__dict__ for k, v in game.player.inventory.equipped.items()},
+        "current_room": game.current_room,
+        "score": game.score,
+        "notes": game.notes_log,
+    }
+    with open(SAVE_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_game(game):
+    if not os.path.exists(SAVE_PATH):
+        return False
+    with open(SAVE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    p = game.player
+    p.level = data.get("level", 1)
+    p.xp = data.get("xp", 0)
+    p.xp_next = data.get("xp_next", XP_LEVEL_BASE)
+    p.skill_points = data.get("skill_points", 0)
+    p.damage_bonus = data.get("damage_bonus", 0)
+    p.speed_bonus = data.get("speed_bonus", 0)
+    p.cd_bonus = data.get("cd_bonus", 0.0)
+    p.range_bonus = data.get("range_bonus", 0)
+    p.inventory.items = [Item(**d) for d in data.get("inventory", [])]
+    p.inventory.equipped = {k: Item(**v) for k, v in data.get("equipped", {}).items()}
+    p.recompute_stats()
+    game.current_room = data.get("current_room", "Коридор")
+    game.score = data.get("score", 0)
+    game.notes_log = data.get("notes", [])
+    game.scene = game.build_room(game.current_room)
+    return True
+
+
+class MainMenu:
+    """Простейшее главное меню."""
+    def __init__(self):
+        self.options = ["Играть", "Выход"]
+        self.idx = 0
+
+    def update(self, events):
+        for e in events:
+            if e.type == pygame.KEYDOWN:
+                if e.key in (pygame.K_DOWN, pygame.K_s):
+                    self.idx = (self.idx + 1) % len(self.options)
+                elif e.key in (pygame.K_UP, pygame.K_w):
+                    self.idx = (self.idx - 1) % len(self.options)
+                elif e.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    return self.options[self.idx]
+        return None
+
+    def draw(self, surf):
+        surf.fill((20, 22, 30))
+        title = text_with_outline("Vanosik Office Saga", font_huge, (240,240,255), (0,0,0))
+        surf.blit(title, (WIDTH//2 - title.get_width()//2, 120))
+        for i, opt in enumerate(self.options):
+            col = (255,255,255) if i == self.idx else (150,150,150)
+            r = text_with_outline(opt, font_big, col, (0,0,0))
+            surf.blit(r, (WIDTH//2 - r.get_width()//2, 260 + i*60))
+
 # ====== CHARACTERS (Deluxe visuals) ======
 class Vanosik(pygame.sprite.Sprite):
     def __init__(self, pos):
@@ -294,6 +453,15 @@ class Vanosik(pygame.sprite.Sprite):
         self.rage = 0
         self.ult_cd = 0.0
 
+        # Новые системы
+        self.inventory = Inventory()
+        self.skills = SkillTree()
+        self.recompute_stats()
+
+    def recompute_stats(self):
+        """Учитывает бонусы от инвентаря."""
+        self.speed = self.base_speed + 14 * self.speed_bonus + self.inventory.bonus_speed()
+
     def _char_surface(self, body_color, shadow=True, punch=False, phase=0.0):
         surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
         if shadow:
@@ -327,6 +495,10 @@ class Vanosik(pygame.sprite.Sprite):
         return surf
 
     def _build_anim_surfaces(self, base_color):
+        path = os.path.join(BASE_DIR, "assets", "vanosik.png")
+        if os.path.exists(path):
+            img = pygame.image.load(path).convert_alpha()
+            return {"idle": [img], "walk": [img], "attack": [img]}
         idle = [ self._char_surface(base_color, punch=False, phase=0.0),
                  self._char_surface(base_color, punch=False, phase=1.1) ]
         walk = [ self._char_surface(base_color, punch=False, phase=p) for p in (0.0,0.9,1.8,2.7) ]
@@ -342,6 +514,7 @@ class Vanosik(pygame.sprite.Sprite):
 
     def update(self, dt, keys):
         if self.ult_cd > 0: self.ult_cd = max(0.0, self.ult_cd - dt)
+        self.recompute_stats()
         vel = pygame.Vector2(0, 0)
         if keys[pygame.K_w]: vel.y -= 1
         if keys[pygame.K_s]: vel.y += 1
@@ -467,6 +640,10 @@ class Pizdyuk(pygame.sprite.Sprite):
         return surf
 
     def _build_anim_surfaces(self, base, hitc):
+        path = os.path.join(BASE_DIR, "assets", "pizdyuk.png")
+        if os.path.exists(path):
+            img = pygame.image.load(path).convert_alpha()
+            return {"run": [img], "hit": [img]}
         run = [ self._char_surface(base, hitc, hurt=False, phase=p) for p in (0.0,1.1,2.2,3.3) ]
         hit = [ self._char_surface(base, hitc, hurt=True,  phase=p) for p in (0.0,1.2) ]
         return {"run": run, "hit": hit}
@@ -611,8 +788,13 @@ class RoomScene:
             self.doors.append(Door(slots[i], nb, f"В {nb}"))
 
     def draw_bg(self, surf):
-        base = ROOM_COLORS.get(self.name, (36,36,42))
-        surf.fill(base)
+        path = os.path.join(BASE_DIR, "assets", "rooms", f"{self.name}.png")
+        if os.path.exists(path):
+            img = pygame.image.load(path).convert()
+            surf.blit(img, (0,0))
+        else:
+            base = ROOM_COLORS.get(self.name, (36,36,42))
+            surf.fill(base)
         # header strip
         pygame.draw.rect(surf, (0,0,0,120), (0,0,WIDTH,60))
         title = text_with_outline(self.name, font_big, (240,240,255), (0,0,0))
@@ -716,6 +898,32 @@ def draw_xp_bar(surface, player):
     hint = font_small.render("1:Урон  2:Скорость  3:-КД  4:Дальность", True, UI_MUTE)
     surface.blit(hint, (x, y - 18))
 
+
+def draw_inventory(surface, inv):
+    rect = pygame.Rect(WIDTH//2-200, HEIGHT//2-150, 400, 300)
+    hud_panel(surface, rect)
+    title = text_with_outline("Инвентарь (I)", font_big, (240,240,255), (0,0,0))
+    surface.blit(title, (rect.x+16, rect.y+12))
+    y = rect.y + 60
+    if not inv.items:
+        surface.blit(font_mid.render("Пусто", True, (220,220,230)), (rect.x+16, y))
+    else:
+        for it in inv.items:
+            surface.blit(font_small.render(f"{it.name}", True, (230,230,240)), (rect.x+16, y))
+            y += 24
+
+
+def draw_skill_tree(surface, tree):
+    rect = pygame.Rect(WIDTH//2-200, HEIGHT//2-150, 400, 300)
+    hud_panel(surface, rect)
+    title = text_with_outline("Навыки (K)", font_big, (240,240,255), (0,0,0))
+    surface.blit(title, (rect.x+16, rect.y+12))
+    y = rect.y + 60
+    for i, (k, sk) in enumerate(tree.skills.items(), 1):
+        status = "✓" if sk.unlocked else f"{i}"
+        txt = font_small.render(f"[{status}] {sk.name}", True, (230,230,240))
+        surface.blit(txt, (rect.x+16, y)); y += 26
+
 # ====== Story / Intro ======
 INTRO_TEXT = [
     "У Ваносика появился помощник — Пиздюк.",
@@ -786,9 +994,17 @@ class Game:
         self.score = 0
         self.fullscreen = False
         self.tab_open = False
+        self.inv_open = False
+        self.skill_open = False
         self.toast = ""
         self.toast_t = 0.0
         self.round = 1
+        self.quests = []
+        self.dialogue = None
+        sword = Item("Степлер-меч", "weapon", damage=2)
+        self.player.inventory.add(sword)
+        self.player.inventory.equip(sword)
+        self.player.recompute_stats()
         self.spawn_note_in_room(self.current_room)
 
     def build_room(self, name):
@@ -830,6 +1046,11 @@ class Game:
         for e in pygame.event.get():
             if e.type == pygame.QUIT: pygame.quit(); sys.exit(0)
             elif e.type == pygame.KEYDOWN:
+                if self.state == "dialogue":
+                    if e.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_e):
+                        if not self.dialogue.next():
+                            self.state = "explore"; self.dialogue = None
+                    continue
                 if e.key == pygame.K_ESCAPE: pygame.quit(); sys.exit(0)
                 elif e.key == pygame.K_F11:
                     self.fullscreen = not self.fullscreen
@@ -840,14 +1061,21 @@ class Game:
                         pygame.display.set_mode((WIDTH, HEIGHT), flags)
                 elif e.key == pygame.K_TAB:
                     self.tab_open = not self.tab_open
+                elif e.key == pygame.K_i:
+                    self.inv_open = not self.inv_open
+                elif e.key == pygame.K_k:
+                    self.skill_open = not self.skill_open
+                elif e.key == pygame.K_F5:
+                    save_game(self); self.toast_show("Сохранено")
+                elif e.key == pygame.K_F9:
+                    if load_game(self): self.toast_show("Загружено")
                 elif e.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
                     if self.player.skill_points > 0:
-                        if e.key == pygame.K_1: self.player.damage_bonus += 1
-                        elif e.key == pygame.K_2: self.player.speed_bonus += 1; self.player.speed = self.player.base_speed + 14 * self.player.speed_bonus
-                        elif e.key == pygame.K_3: self.player.cd_bonus += 1.0
-                        elif e.key == pygame.K_4: self.player.range_bonus += 1
-                        self.player.skill_points -= 1
+                        keymap = {pygame.K_1:"damage", pygame.K_2:"speed", pygame.K_3:"cooldown", pygame.K_4:"range"}
+                        self.player.skills.unlock(keymap[e.key], self.player)
 
+        if self.state == "dialogue":
+            return
         if self.state == "explore":
             self.player.update(dt, keys)
             # взаимодействие — двери/улики
@@ -859,6 +1087,9 @@ class Game:
                     if not n.picked and self.player.rect.colliderect(n.rect):
                         n.picked = True
                         self.notes_log.append(n.text)
+                        self.quests.append(Quest(n.text))
+                        self.dialogue = Dialogue([n.text])
+                        self.state = "dialogue"
                         self.toast_show("Улика подобрана (TAB — журнал)")
             # переезд Пиздюка
             self.piz_move_t -= dt
@@ -880,7 +1111,7 @@ class Game:
                         except: pass
                     # particles
                     particles.spawn_hit(self.piz.rect.center, (255,200,60))
-                    dmg = DAMAGE_PER_HIT_BASE + 2*self.player.damage_bonus
+                    dmg = DAMAGE_PER_HIT_BASE + 2*self.player.damage_bonus + self.player.inventory.bonus_damage()
                     self.piz.hp = max(0, self.piz.hp - dmg)
                     k = Vector2(self.piz.rect.center) - Vector2(self.player.rect.center)
                     k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*self.player.damage_bonus)
@@ -905,7 +1136,7 @@ class Game:
                     self.player.rage = 0; self.player.ult_cd = ULT_COOLDOWN
                     ec = Vector2(self.piz.rect.center); pc = Vector2(self.player.rect.center)
                     if ec.distance_to(pc) <= ULT_RADIUS:
-                        dmg = ULT_DAMAGE + 3*self.player.damage_bonus
+                        dmg = ULT_DAMAGE + 3*self.player.damage_bonus + self.player.inventory.bonus_damage()
                         self.piz.hp = max(0, self.piz.hp - dmg)
                         k = (ec - pc)
                         k = (k.normalize() if k.length_squared() else Vector2(1,0)) * ULT_KNOCKBACK
@@ -948,6 +1179,14 @@ class Game:
         # Журнал
         if self.tab_open:
             draw_notes_log(surf, self.notes_log)
+        if self.inv_open:
+            draw_inventory(surf, self.player.inventory)
+        if self.skill_open:
+            draw_skill_tree(surf, self.player.skills)
+        if self.state == "dialogue" and self.dialogue:
+            rect = pygame.Rect(WIDTH//2-300, HEIGHT-180, 600, 140)
+            hud_panel(surf, rect)
+            surf.blit(font_mid.render(self.dialogue.current(), True, (240,240,255)), (rect.x+16, rect.y+16))
 
         # Flash
         a = flash_overlay.get_alpha()
@@ -988,6 +1227,17 @@ class Game:
 # ====== MAIN ======
 def main():
     show_intro()
+    menu = MainMenu()
+    while True:
+        events = pygame.event.get()
+        res = menu.update(events)
+        menu.draw(screen)
+        pygame.display.flip()
+        clock.tick(FPS)
+        if res == "Играть":
+            break
+        if res == "Выход":
+            pygame.quit(); sys.exit(0)
 
     # фон: делюкс-градиентный с легкой виньеткой
     global flash_overlay, particles
