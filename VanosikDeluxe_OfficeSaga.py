@@ -344,6 +344,20 @@ class Dialogue:
             return True
         return False
 
+
+class NPC:
+    def __init__(self, pos, dialogue_lines, quest_desc, reward=0):
+        self.pos = Vector2(pos)
+        self.rect = pygame.Rect(int(self.pos.x - 16), int(self.pos.y - 32), 32, 48)
+        self.dialogue_lines = dialogue_lines
+        self.quest_desc = quest_desc
+        self.reward = reward
+        self.talked = False
+
+    def draw(self, surf):
+        pygame.draw.rect(surf, (200, 180, 120), self.rect)
+        surf.blit(font_small.render("?", True, (0, 0, 0)), (self.rect.x + 9, self.rect.y + 4))
+
 # ====== SAVE / LOAD ======
 SAVE_PATH = os.path.join(BASE_DIR, "save.json")
 
@@ -776,6 +790,7 @@ class RoomScene:
         self.name = name
         self.doors = []
         self.notes = []
+        self.npcs = []
 
     def make_default_doors(self):
         neighbors = ROOMS[self.name]
@@ -814,8 +829,12 @@ class RoomScene:
             a = 28 if (x//step) % 2 == 0 else 16
             pygame.draw.line(grid, (255,255,255,a), (x,60), (x,HEIGHT))
         surf.blit(grid, (0,0))
-        for d in self.doors: d.draw(surf)
-        for n in self.notes: n.draw(surf)
+        for d in self.doors:
+            d.draw(surf)
+        for n in self.notes:
+            n.draw(surf)
+        for npc in self.npcs:
+            npc.draw(surf)
 
 # ====== UI (HUD, карта, журнал) ======
 def hud_panel(surf, rect, alpha=140):
@@ -1001,6 +1020,7 @@ class Game:
         self.round = 1
         self.quests = []
         self.dialogue = None
+        self.current_npc = None
         sword = Item("Степлер-меч", "weapon", damage=2)
         self.player.inventory.add(sword)
         self.player.inventory.equip(sword)
@@ -1011,6 +1031,12 @@ class Game:
         sc = RoomScene(name)
         sc.make_default_doors()
         sc.notes = []
+        sc.npcs = []
+        if name == "Коридор":
+            sc.npcs.append(NPC((WIDTH//2 + 140, HEIGHT//2),
+                                ["Здорова!", "Вот тебе полезная улика."],
+                                "NPC намекнул на след.",
+                                reward=20))
         return sc
 
     def spawn_note_in_room(self, name):
@@ -1049,6 +1075,15 @@ class Game:
                 if self.state == "dialogue":
                     if e.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_e):
                         if not self.dialogue.next():
+                            if self.current_npc:
+                                npc = self.current_npc
+                                self.current_npc = None
+                                if npc.quest_desc:
+                                    self.quests.append(Quest(npc.quest_desc))
+                                    self.notes_log.append(npc.quest_desc)
+                                    self.score += npc.reward
+                                npc.talked = True
+                                self.toast_show("Улика добавлена")
                             self.state = "explore"; self.dialogue = None
                     continue
                 if e.key == pygame.K_ESCAPE: pygame.quit(); sys.exit(0)
@@ -1078,7 +1113,7 @@ class Game:
             return
         if self.state == "explore":
             self.player.update(dt, keys)
-            # взаимодействие — двери/улики
+            # взаимодействие — двери/улики/NPC
             if keys[pygame.K_e]:
                 for d in self.scene.doors:
                     if self.player.rect.colliderect(d.rect):
@@ -1091,6 +1126,13 @@ class Game:
                         self.dialogue = Dialogue([n.text])
                         self.state = "dialogue"
                         self.toast_show("Улика подобрана (TAB — журнал)")
+                for npc in self.scene.npcs:
+                    if not npc.talked and self.player.rect.colliderect(npc.rect):
+                        self.dialogue = Dialogue(npc.dialogue_lines)
+                        self.state = "dialogue"
+                        self.current_npc = npc
+                        self.toast_show("Разговор")
+                        break
             # переезд Пиздюка
             self.piz_move_t -= dt
             if self.piz_move_t <= 0:
@@ -1169,6 +1211,10 @@ class Game:
                 if not n.picked and self.player.rect.colliderect(n.rect):
                     s = text_with_outline("E — прочитать", font_small, (240,240,255), (0,0,0))
                     surf.blit(s, (n.rect.centerx-50, n.rect.y-26))
+            for npc in self.scene.npcs:
+                if not npc.talked and self.player.rect.colliderect(npc.rect):
+                    s = text_with_outline("E — поговорить", font_small, (240,240,255), (0,0,0))
+                    surf.blit(s, (npc.rect.centerx-60, npc.rect.y-26))
 
         # Частицы
         particles.render(surf)
