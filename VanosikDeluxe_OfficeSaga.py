@@ -21,21 +21,10 @@ Vanosik vs Pizdyuk — Office Saga (Deluxe Roguelike)
   ESC — выход
 """
 
-# --- Auto-install pygame if missing ---
-try:
-    import pygame  # noqa
-except ModuleNotFoundError:
-    import sys, subprocess
-    print("Pygame not found. Installing...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pygame", "--quiet"])
-    except Exception as e:
-        print("Auto-install failed:", e)
-        print("Install manually:  python -m pip install pygame")
-        raise
-    import pygame  # noqa
-
+# Импортируем pygame и стандартные модули
+import pygame
 import sys, random, math, os, wave, struct, time, json, datetime
+from dataclasses import dataclass, field, asdict
 from pygame import Vector2
 
 # ====== GAME SETTINGS ======
@@ -264,19 +253,19 @@ class ParticleSystem:
 # инвентарь, навыки и квесты. Реализация остаётся базовой и
 # служит заготовкой для дальнейшего развития.
 
+@dataclass
 class Item:
     """Простой предмет инвентаря."""
-    def __init__(self, name, itype="misc", damage=0, speed=0):
-        self.name = name
-        self.type = itype
-        self.damage = damage
-        self.speed = speed
+    name: str
+    type: str = "misc"
+    damage: int = 0
+    speed: int = 0
 
 
+@dataclass
 class Inventory:
-    def __init__(self):
-        self.items = []
-        self.equipped = {}
+    items: list[Item] = field(default_factory=list)
+    equipped: dict[str, Item] = field(default_factory=dict)
 
     def add(self, item: Item):
         self.items.append(item)
@@ -291,11 +280,11 @@ class Inventory:
         return sum(i.speed for i in self.equipped.values())
 
 
+@dataclass
 class Skill:
-    def __init__(self, name, cost=1):
-        self.name = name
-        self.cost = cost
-        self.unlocked = False
+    name: str
+    cost: int = 1
+    unlocked: bool = False
 
 
 class SkillTree:
@@ -372,8 +361,8 @@ def save_game(game):
         "speed_bonus": game.player.speed_bonus,
         "cd_bonus": game.player.cd_bonus,
         "range_bonus": game.player.range_bonus,
-        "inventory": [i.__dict__ for i in game.player.inventory.items],
-        "equipped": {k: v.__dict__ for k, v in game.player.inventory.equipped.items()},
+        "inventory": [asdict(i) for i in game.player.inventory.items],
+        "equipped": {k: asdict(v) for k, v in game.player.inventory.equipped.items()},
         "current_room": game.current_room,
         "score": game.score,
         "notes": game.notes_log,
@@ -385,8 +374,12 @@ def save_game(game):
 def load_game(game):
     if not os.path.exists(SAVE_PATH):
         return False
-    with open(SAVE_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(SAVE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print("Ошибка загрузки сохранения:", e)
+        return False
     p = game.player
     p.level = data.get("level", 1)
     p.xp = data.get("xp", 0)
