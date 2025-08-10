@@ -52,6 +52,8 @@ ULT_KNOCKBACK = 110
 # Дополнительные параметры RPG/пошагового боя
 BASE_PLAYER_HP = 100
 ENEMY_DAMAGE_BASE = 8
+PLAYER_STEP = 60           # длина шага игрока в пошаговом бою
+ENEMY_ATTACK_RANGE = 80    # радиус удара Пиздюка
 
 # Boss
 BOSS_HP_MULT = 2.2
@@ -1166,33 +1168,56 @@ class Game:
 
     def player_action(self, keys):
         p = self.player
+        if self.action_cd <= 0:
+            dx = dy = 0
+            if keys[pygame.K_w] or keys[pygame.K_UP]:
+                dy -= PLAYER_STEP
+            if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+                dy += PLAYER_STEP
+            if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+                dx -= PLAYER_STEP
+            if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+                dx += PLAYER_STEP
+            if dx or dy:
+                p.rect.x = max(0, min(WIDTH - p.rect.w, p.rect.x + dx))
+                p.rect.y = max(80, min(HEIGHT - p.rect.h, p.rect.y + dy))
+                p._set_state("walk")
+                self.action_cd = ACTION_DELAY
+                self.start_enemy_turn()
+                p._set_state("idle")
+                return
+
         if keys[pygame.K_SPACE] and p.can_attack():
             p.start_attack()
             hb = p.get_attack_hitbox()
             hit = hb.colliderect(self.piz.rect)
             if hit:
-                if snd_hit:
-                    try: snd_hit.play()
-                    except: pass
-                particles.spawn_hit(self.piz.rect.center, (255,200,60))
-                dmg = p.attack_damage()
-                self.piz.hp = max(0, self.piz.hp - dmg)
-                k = Vector2(self.piz.rect.center) - Vector2(p.rect.center)
-                k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*p.damage_bonus)
-                if self.piz.is_boss: k *= BOSS_KB_RESIST
-                self.piz.on_hit(k)
-                self.score += BASE_POINTS
-                leveled = p.add_xp(XP_PER_HIT)
-                p.rage = min(RAGE_MAX, p.rage + RAGE_PER_HIT)
-                if leveled:
-                    self.toast_show("Новый уровень! (1..4 — прокачка)", 1.8)
-                if self.piz.hp <= 0:
-                    self.round += 1
-                    p.add_xp(XP_PER_LEVEL_CLEAR)
-                    self.state = "explore"; self.piz = None
-                    self.change_piz_room(); self.piz_move_t = MOVE_DELAY
-                    self.toast_show("Пиздюк повержен! Ищем дальше...")
-                    return
+                if random.random() < 0.8:
+                    if snd_hit:
+                        try: snd_hit.play()
+                        except: pass
+                    particles.spawn_hit(self.piz.rect.center, (255,200,60))
+                    base = p.attack_damage()
+                    dmg = random.randint(max(1, base-2), base+2)
+                    self.piz.hp = max(0, self.piz.hp - dmg)
+                    k = Vector2(self.piz.rect.center) - Vector2(p.rect.center)
+                    k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*p.damage_bonus)
+                    if self.piz.is_boss: k *= BOSS_KB_RESIST
+                    self.piz.on_hit(k)
+                    self.score += BASE_POINTS
+                    leveled = p.add_xp(XP_PER_HIT)
+                    p.rage = min(RAGE_MAX, p.rage + RAGE_PER_HIT)
+                    if leveled:
+                        self.toast_show("Новый уровень! (1..4 — прокачка)", 1.8)
+                    if self.piz.hp <= 0:
+                        self.round += 1
+                        p.add_xp(XP_PER_LEVEL_CLEAR)
+                        self.state = "explore"; self.piz = None
+                        self.change_piz_room(); self.piz_move_t = MOVE_DELAY
+                        self.toast_show("Пиздюк повержен! Ищем дальше...")
+                        return
+                else:
+                    self.toast_show("Промах!")
             p._hit_registered = True
             p.attacking_t = 0.0
             p._set_state("idle")
@@ -1228,13 +1253,21 @@ class Game:
             self.enemy_timer -= dt
             if self.enemy_timer > 0:
                 return
-        dmg = self.piz.attack_damage()
-        self.player.hp = max(0, self.player.hp - dmg)
-        self.toast_show(f"Пиздюк ударил (-{dmg} HP)")
-        if self.player.hp <= 0:
-            self.toast_show("Ваносик пал!", 3.0)
-            self.reset()
-            return
+        dist = Vector2(self.piz.rect.center).distance_to(self.player.rect.center)
+        if dist <= ENEMY_ATTACK_RANGE:
+            if random.random() < 0.8:
+                base = self.piz.attack_damage()
+                dmg = random.randint(max(1, base-2), base+2)
+                self.player.hp = max(0, self.player.hp - dmg)
+                self.toast_show(f"Пиздюк ударил (-{dmg} HP)")
+                if self.player.hp <= 0:
+                    self.toast_show("Ваносик пал!", 3.0)
+                    self.reset()
+                    return
+            else:
+                self.toast_show("Пиздюк промахнулся")
+        else:
+            self.toast_show("Пиздюк не достал")
         self.turn = "player"
 
     def update(self, dt, keys):
