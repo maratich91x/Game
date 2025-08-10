@@ -344,6 +344,38 @@ class Stats:
     luck: int = 5
 
 
+# Порядок и локализация характеристик
+STAT_ORDER = [
+    "strength",
+    "agility",
+    "endurance",
+    "perception",
+    "charisma",
+    "intelligence",
+    "luck",
+]
+STAT_NAMES = {
+    "strength": "Сила",
+    "agility": "Ловкость",
+    "endurance": "Выносливость",
+    "perception": "Восприятие",
+    "charisma": "Харизма",
+    "intelligence": "Интеллект",
+    "luck": "Удача",
+}
+
+# Описание влияния характеристик
+STAT_DESCRIPTIONS = {
+    "strength": "Увеличивает урон атак.",
+    "agility": "Повышает скорость и шанс уклонения.",
+    "endurance": "Увеличивает запас здоровья.",
+    "perception": "Улучшает шанс попадания.",
+    "charisma": "Влияет на взаимодействие с NPC.",
+    "intelligence": "Усиливает эффективность навыков.",
+    "luck": "Расширяет диапазон наносимого урона.",
+}
+
+
 class TurnManager:
     """Управляет сменой ходов и очками действия."""
 
@@ -1181,50 +1213,61 @@ def show_intro():
         pygame.display.flip(); clock.tick(60)
 
 
-def _draw_attr_menu(title_text, stats, points):
+def _draw_attr_menu(title_text, stats, points, selected: str | None = None):
     tbg = pygame.Surface((WIDTH, HEIGHT)); draw_vertical_gradient(tbg, BG_TOP, BG_BOTTOM)
     screen.blit(tbg, (0, 0))
     title = text_with_outline(title_text, font_big, (240,240,255), (0,0,0))
     screen.blit(title, (WIDTH//2 - title.get_width()//2, 40))
-    attrs = [
-        ("Сила", "strength", "увеличивает урон"),
-        ("Ловкость", "agility", "скорость и уклонение"),
-        ("Выносливость", "endurance", "запас здоровья"),
-        ("Восприятие", "perception", "шанс попадания"),
-        ("Харизма", "charisma", "влияние на NPC"),
-        ("Интеллект", "intelligence", "эффективность навыков"),
-        ("Удача", "luck", "диапазон урона"),
-    ]
-    for i, (name, attr, hint) in enumerate(attrs, 1):
+
+    mouse_pos = pygame.mouse.get_pos()
+    hovered = selected
+    line_rects = {}
+    for i, attr in enumerate(STAT_ORDER, 1):
+        name = STAT_NAMES[attr]
         val = getattr(stats, attr)
-        txt = font_small.render(f"{i}. {name}: {val} — {hint}", True, (230,230,240))
-        screen.blit(txt, (80, 100 + i*32))
-    tip = font_small.render(f"Очки: {points}  (1-7 — увеличить, Enter — продолжить)", True, (230,230,240))
+        txt = f"{i}. {name}: {val}"
+        color = (230,230,240)
+        rect = font_small.render(txt, True, color).get_rect(topleft=(80, 100 + i*32))
+        line_rects[attr] = rect
+        if rect.collidepoint(mouse_pos):
+            hovered = attr
+            color = (255,255,160)
+        elif selected == attr:
+            color = (255,255,160)
+        screen.blit(font_small.render(txt, True, color), rect.topleft)
+
+    tip = font_small.render(
+        f"Очки: {points}  (1-7 — увеличить, Enter — продолжить)", True, (230,230,240)
+    )
     screen.blit(tip, (80, HEIGHT-60))
+
+    if hovered:
+        desc = STAT_DESCRIPTIONS.get(hovered, "")
+        lines = wrap_text(desc, font_small, WIDTH - 160)
+        y = HEIGHT - 120
+        for line in lines:
+            screen.blit(font_small.render(line, True, UI_MUTE), (80, y))
+            y += font_small.get_height() + 2
 
 
 def show_character_creation():
     points = 10
     stats = Stats()
-    keymap = {
-        pygame.K_1: "strength",
-        pygame.K_2: "agility",
-        pygame.K_3: "endurance",
-        pygame.K_4: "perception",
-        pygame.K_5: "charisma",
-        pygame.K_6: "intelligence",
-        pygame.K_7: "luck",
-    }
+    keymap = {getattr(pygame, f"K_{i}"): attr for i, attr in enumerate(STAT_ORDER, 1)}
+    selected = None
     while True:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 pygame.quit(); sys.exit(0)
             if e.type == pygame.KEYDOWN:
                 if e.key in keymap and points > 0:
-                    attr = keymap[e.key]; setattr(stats, attr, getattr(stats, attr)+1); points -= 1
+                    attr = keymap[e.key]
+                    setattr(stats, attr, getattr(stats, attr)+1)
+                    points -= 1
+                    selected = attr
                 elif e.key == pygame.K_RETURN and points == 0:
                     return stats
-        _draw_attr_menu("Создание персонажа", stats, points)
+        _draw_attr_menu("Создание персонажа", stats, points, selected)
         pygame.display.flip(); clock.tick(60)
 
 
@@ -1232,29 +1275,25 @@ def show_level_up_menu(player):
     points = player.attr_points
     if points <= 0:
         return
-    keymap = {
-        pygame.K_1: "strength",
-        pygame.K_2: "agility",
-        pygame.K_3: "endurance",
-        pygame.K_4: "perception",
-        pygame.K_5: "charisma",
-        pygame.K_6: "intelligence",
-        pygame.K_7: "luck",
-    }
+    keymap = {getattr(pygame, f"K_{i}"): attr for i, attr in enumerate(STAT_ORDER, 1)}
+    selected = None
     while True:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 pygame.quit(); sys.exit(0)
             if e.type == pygame.KEYDOWN:
                 if e.key in keymap and points > 0:
-                    attr = keymap[e.key]; setattr(player.stats, attr, getattr(player.stats, attr)+1); points -= 1
+                    attr = keymap[e.key]
+                    setattr(player.stats, attr, getattr(player.stats, attr)+1)
+                    points -= 1
+                    selected = attr
                 elif e.key == pygame.K_RETURN and points == 0:
                     player.attr_points = 0
                     player.hp_max = BASE_PLAYER_HP + player.stats.endurance * 10
                     player.hp = player.hp_max
                     player.recompute_stats()
                     return
-        _draw_attr_menu("Повышение уровня", player.stats, points)
+        _draw_attr_menu("Повышение уровня", player.stats, points, selected)
         pygame.display.flip(); clock.tick(60)
 
 # ====== GAME STATE (explore/combat) ======
@@ -1661,6 +1700,17 @@ class Game:
         draw_rage_bar(surf, self.player)
         draw_xp_bar(surf, self.player)
         draw_minimap(surf, self.current_room, self.piz_room)
+
+        # подсказки по характеристикам
+        hint_text = "; ".join(
+            f"{STAT_NAMES[a]} — {STAT_DESCRIPTIONS[a]}" for a in STAT_ORDER
+        )
+        lines = wrap_text(hint_text, font_small, WIDTH - 320)
+        y = HEIGHT - 150
+        for line in lines:
+            txt = font_small.render(line, True, UI_MUTE)
+            surf.blit(txt, (WIDTH//2 - txt.get_width()//2, y))
+            y += font_small.get_height() + 2
 
         if self.toast_t > 0 and self.toast:
             rect = pygame.Rect(WIDTH//2-300, HEIGHT-90, 600, 46)
