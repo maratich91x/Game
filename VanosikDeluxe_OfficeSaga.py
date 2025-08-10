@@ -312,6 +312,10 @@ class Stats:
     strength: int = 5
     agility: int = 5
     endurance: int = 5
+    perception: int = 5
+    charisma: int = 5
+    intelligence: int = 5
+    luck: int = 5
 
 
 class TurnManager:
@@ -344,7 +348,9 @@ class TurnManager:
 
 def calc_hit_chance(attacker, defender):
     """Вычисляет шанс попадания с учётом характеристик и навыков."""
-    chance = 0.75 + 0.03 * (attacker.stats.agility - defender.stats.agility)
+    chance = 0.75
+    chance += 0.03 * (attacker.stats.agility - defender.stats.agility)
+    chance += 0.02 * (attacker.stats.perception - defender.stats.perception)
     chance += 0.02 * getattr(attacker, "damage_bonus", 0)
     return max(0.1, min(0.95, chance))
 
@@ -352,7 +358,8 @@ def calc_hit_chance(attacker, defender):
 def calc_damage(attacker, defender):
     """Расчёт урона с учётом силы и выносливости."""
     base = attacker.attack_damage()
-    variance = random.randint(-2, 2)
+    luck_range = attacker.stats.luck // 2
+    variance = random.randint(-2, 2 + luck_range)
     reduction = defender.stats.endurance * 0.5
     return max(1, int(base + variance - reduction))
 
@@ -440,6 +447,8 @@ def save_game(game):
         "xp": game.player.xp,
         "xp_next": game.player.xp_next,
         "skill_points": game.player.skill_points,
+        "attr_points": game.player.attr_points,
+        "stats": asdict(game.player.stats),
         "damage_bonus": game.player.damage_bonus,
         "speed_bonus": game.player.speed_bonus,
         "cd_bonus": game.player.cd_bonus,
@@ -468,6 +477,10 @@ def load_game(game):
     p.xp = data.get("xp", 0)
     p.xp_next = data.get("xp_next", XP_LEVEL_BASE)
     p.skill_points = data.get("skill_points", 0)
+    p.attr_points = data.get("attr_points", 0)
+    st = data.get("stats")
+    if isinstance(st, dict):
+        p.stats = Stats(**st)
     p.damage_bonus = data.get("damage_bonus", 0)
     p.speed_bonus = data.get("speed_bonus", 0)
     p.cd_bonus = data.get("cd_bonus", 0.0)
@@ -510,7 +523,7 @@ class MainMenu:
 
 # ====== CHARACTERS (Deluxe visuals) ======
 class Vanosik(pygame.sprite.Sprite):
-    def __init__(self, pos):
+    def __init__(self, pos, stats: Stats | None = None):
         super().__init__()
         self.w, self.h = 58, 74
         self.images = self._build_anim_surfaces(VANOSIK_CLR)
@@ -530,7 +543,8 @@ class Vanosik(pygame.sprite.Sprite):
         self._hit_registered = False
 
         # Базовые характеристики и здоровье
-        self.stats = Stats()
+        self.stats = stats if stats else Stats()
+        self.attr_points = 0
         self.hp_max = BASE_PLAYER_HP + self.stats.endurance * 10
         self.hp = self.hp_max
 
@@ -683,6 +697,7 @@ class Vanosik(pygame.sprite.Sprite):
             self.xp -= self.xp_next
             self.level += 1
             self.skill_points += 1
+            self.attr_points += 2
             self.xp_next = int(self.xp_next * XP_LEVEL_GROW)
             leveled = True
         return leveled
@@ -1109,14 +1124,91 @@ def show_intro():
 
         pygame.display.flip(); clock.tick(60)
 
+
+def _draw_attr_menu(title_text, stats, points):
+    tbg = pygame.Surface((WIDTH, HEIGHT)); draw_vertical_gradient(tbg, BG_TOP, BG_BOTTOM)
+    screen.blit(tbg, (0, 0))
+    title = text_with_outline(title_text, font_big, (240,240,255), (0,0,0))
+    screen.blit(title, (WIDTH//2 - title.get_width()//2, 40))
+    attrs = [
+        ("Сила", "strength", "увеличивает урон"),
+        ("Ловкость", "agility", "скорость и уклонение"),
+        ("Выносливость", "endurance", "запас здоровья"),
+        ("Восприятие", "perception", "шанс попадания"),
+        ("Харизма", "charisma", "влияние на NPC"),
+        ("Интеллект", "intelligence", "эффективность навыков"),
+        ("Удача", "luck", "диапазон урона"),
+    ]
+    for i, (name, attr, hint) in enumerate(attrs, 1):
+        val = getattr(stats, attr)
+        txt = font_small.render(f"{i}. {name}: {val} — {hint}", True, (230,230,240))
+        screen.blit(txt, (80, 100 + i*32))
+    tip = font_small.render(f"Очки: {points}  (1-7 — увеличить, Enter — продолжить)", True, (230,230,240))
+    screen.blit(tip, (80, HEIGHT-60))
+
+
+def show_character_creation():
+    points = 10
+    stats = Stats()
+    keymap = {
+        pygame.K_1: "strength",
+        pygame.K_2: "agility",
+        pygame.K_3: "endurance",
+        pygame.K_4: "perception",
+        pygame.K_5: "charisma",
+        pygame.K_6: "intelligence",
+        pygame.K_7: "luck",
+    }
+    while True:
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                pygame.quit(); sys.exit(0)
+            if e.type == pygame.KEYDOWN:
+                if e.key in keymap and points > 0:
+                    attr = keymap[e.key]; setattr(stats, attr, getattr(stats, attr)+1); points -= 1
+                elif e.key == pygame.K_RETURN and points == 0:
+                    return stats
+        _draw_attr_menu("Создание персонажа", stats, points)
+        pygame.display.flip(); clock.tick(60)
+
+
+def show_level_up_menu(player):
+    points = player.attr_points
+    if points <= 0:
+        return
+    keymap = {
+        pygame.K_1: "strength",
+        pygame.K_2: "agility",
+        pygame.K_3: "endurance",
+        pygame.K_4: "perception",
+        pygame.K_5: "charisma",
+        pygame.K_6: "intelligence",
+        pygame.K_7: "luck",
+    }
+    while True:
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                pygame.quit(); sys.exit(0)
+            if e.type == pygame.KEYDOWN:
+                if e.key in keymap and points > 0:
+                    attr = keymap[e.key]; setattr(player.stats, attr, getattr(player.stats, attr)+1); points -= 1
+                elif e.key == pygame.K_RETURN and points == 0:
+                    player.attr_points = 0
+                    player.hp_max = BASE_PLAYER_HP + player.stats.endurance * 10
+                    player.hp = player.hp_max
+                    player.recompute_stats()
+                    return
+        _draw_attr_menu("Повышение уровня", player.stats, points)
+        pygame.display.flip(); clock.tick(60)
+
 # ====== GAME STATE (explore/combat) ======
 class Game:
-    def __init__(self):
-        self.reset()
+    def __init__(self, stats: Stats | None = None):
+        self.reset(stats)
 
-    def reset(self):
+    def reset(self, stats: Stats | None = None):
         self.state = "explore"    # explore | combat
-        self.player = Vanosik((WIDTH//2, HEIGHT//2+60))
+        self.player = Vanosik((WIDTH//2, HEIGHT//2+60), stats=stats)
         self.current_room = "Коридор"
         self.scene = self.build_room(self.current_room)
         self.notes_log = []
@@ -1248,10 +1340,12 @@ class Game:
                     leveled = p.add_xp(XP_PER_HIT)
                     p.rage = min(RAGE_MAX, p.rage + RAGE_PER_HIT)
                     if leveled:
-                        self.toast_show("Новый уровень! (1..4 — прокачка)", 1.8)
+                        show_level_up_menu(p)
                     if self.piz.hp <= 0:
                         self.round += 1
-                        p.add_xp(XP_PER_LEVEL_CLEAR)
+                        leveled2 = p.add_xp(XP_PER_LEVEL_CLEAR)
+                        if leveled2:
+                            show_level_up_menu(p)
                         self.state = "explore"; self.piz = None
                         self.change_piz_room(); self.piz_move_t = MOVE_DELAY
                         self.toast_show("Пиздюк повержен! Ищем дальше...")
@@ -1278,7 +1372,9 @@ class Game:
                     self.score += 60
                     if self.piz.hp <= 0:
                         self.round += 1
-                        p.add_xp(XP_PER_LEVEL_CLEAR)
+                        leveled = p.add_xp(XP_PER_LEVEL_CLEAR)
+                        if leveled:
+                            show_level_up_menu(p)
                         self.state = "explore"; self.piz = None
                         self.change_piz_room(); self.piz_move_t = MOVE_DELAY
                         self.toast_show("Пиздюк повержен! Ищем дальше...")
@@ -1306,7 +1402,7 @@ class Game:
                 self.toast_show(f"Пиздюк ударил (-{dmg} HP)")
                 if self.player.hp <= 0:
                     self.toast_show("Ваносик пал!", 3.0)
-                    self.reset()
+                    self.reset(self.player.stats)
                     return
             else:
                 self.toast_show("Пиздюк промахнулся")
@@ -1519,8 +1615,8 @@ def main():
     global flash_overlay, particles
     flash_overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA); flash_overlay.fill((255,180,100,180)); flash_overlay.set_alpha(0)
     particles = ParticleSystem()
-
-    game = Game()
+    stats = show_character_creation()
+    game = Game(stats)
     last = time.perf_counter()
     while True:
         now = time.perf_counter(); dt = min(0.03, now-last); last = now
