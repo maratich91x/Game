@@ -296,6 +296,8 @@ class Weapon:
     damage: int
     range: int
     ap_cost: int = 1
+    upgrade_level: int = 0
+    upgrade_cost_base: int = 5
 
 
 @dataclass
@@ -330,6 +332,32 @@ class Inventory:
 
     def bonus_speed(self):
         return sum(i.speed for i in self.equipped.values())
+
+    def coin_count(self) -> int:
+        return sum(1 for i in self.items if i.name == "Монетка")
+
+    def upgrade_weapon(self) -> bool:
+        """Попытаться улучшить текущее оружие.
+        Возвращает True при успехе."""
+        w = self.current_weapon()
+        if not w:
+            return False
+        cost = w.upgrade_cost_base * (w.upgrade_level + 1)
+        if self.coin_count() < cost:
+            return False
+        # списываем монетки
+        removed = 0
+        new_items = []
+        for it in self.items:
+            if it.name == "Монетка" and removed < cost:
+                removed += 1
+            else:
+                new_items.append(it)
+        self.items = new_items
+        w.upgrade_level += 1
+        w.damage += 2
+        w.range += 4
+        return True
 
 
 @dataclass
@@ -634,7 +662,8 @@ class Vanosik(pygame.sprite.Sprite):
     def attack_damage(self):
         weapon = self.inventory.current_weapon()
         base = self.stats.strength + (weapon.damage if weapon else DAMAGE_PER_HIT_BASE)
-        return base + 2 * self.damage_bonus + self.inventory.bonus_damage()
+        extra = weapon.upgrade_level * 2 if weapon else 0
+        return base + extra + 2 * self.damage_bonus + self.inventory.bonus_damage()
 
     def _char_surface(self, body_color, shadow=True, punch=False, phase=0.0):
         surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
@@ -914,7 +943,8 @@ class Pizdyuk(pygame.sprite.Sprite):
     def attack_damage(self):
         weapon = self.weapon
         base = self.stats.strength + (weapon.damage if weapon else ENEMY_DAMAGE_BASE)
-        return base
+        extra = weapon.upgrade_level * 2 if weapon else 0
+        return base + extra
 
 # ====== Office map ======
 ROOMS = {
@@ -1181,12 +1211,25 @@ def draw_inventory(surface, inv):
     title = text_with_outline("Инвентарь (I)", font_big, (240,240,255), (0,0,0))
     surface.blit(title, (rect.x+16, rect.y+12))
     y = rect.y + 60
-    if not inv.items:
-        surface.blit(font_mid.render("Пусто", True, (220,220,230)), (rect.x+16, y))
-    else:
+    coins = inv.coin_count()
+    surface.blit(font_small.render(f"Монеты: {coins}", True, (230,230,240)), (rect.x+16, y))
+    y += 28
+    weapon = inv.current_weapon()
+    if weapon:
+        surface.blit(font_small.render(f"Оружие: {weapon.name} (ур.{weapon.upgrade_level})", True, (230,230,240)), (rect.x+16, y))
+        y += 24
+        surface.blit(font_small.render(f"Урон {weapon.damage}  Дист {weapon.range}", True, (230,230,240)), (rect.x+16, y))
+        y += 30
+        cost = weapon.upgrade_cost_base * (weapon.upgrade_level + 1)
+        hint = font_small.render(f"[U] Улучшить за {cost} монет", True, UI_MUTE)
+        surface.blit(hint, (rect.x+16, rect.y + rect.height - 40))
+    if inv.items:
+        y_items = rect.y + 60
         for it in inv.items:
-            surface.blit(font_small.render(f"{it.name}", True, (230,230,240)), (rect.x+16, y))
-            y += 24
+            if it.name == "Монетка":
+                continue
+            surface.blit(font_small.render(f"{it.name}", True, (230,230,240)), (rect.x+220, y_items))
+            y_items += 24
 
 
 def draw_skill_tree(surface, tree):
@@ -1609,6 +1652,12 @@ class Game:
                     w = self.player.inventory.switch_weapon()
                     if w:
                         self.toast_show(f"Экипировано: {w.name}")
+                elif e.key == pygame.K_u:
+                    if self.inv_open:
+                        if self.player.inventory.upgrade_weapon():
+                            self.toast_show("Оружие улучшено")
+                        else:
+                            self.toast_show("Недостаточно монет")
 
         if self.state == "dialogue":
             return
