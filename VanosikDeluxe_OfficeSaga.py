@@ -977,12 +977,54 @@ class Note:
         pygame.draw.rect(surf, (80,60,20), self.rect, 2)
         surf.blit(font_small.render("✉", True, (60,40,10)), (self.rect.x+3, self.rect.y-2))
 
+class InteractiveObject:
+    """Базовый интерактивный объект комнаты."""
+    def __init__(self, rect):
+        self.rect = pygame.Rect(rect)
+        self.used = False
+
+    def interact(self, game):
+        """Взаимодействие с объектом. Должно быть переопределено."""
+        raise NotImplementedError
+
+    def draw(self, surf):
+        raise NotImplementedError
+
+
+class Desk(InteractiveObject):
+    """Рабочий стол, который можно обыскать."""
+    def __init__(self, pos):
+        rect = pygame.Rect(int(pos[0]-30), int(pos[1]-20), 60, 40)
+        super().__init__(rect)
+
+    def interact(self, game):
+        if self.used:
+            return
+        self.used = True
+        if random.random() < 0.6:
+            item = Item("Монетка")
+            game.player.inventory.add(item)
+            game.toast_show("Нашёл монетку")
+        else:
+            dmg = random.randint(1, 3)
+            game.player.hp = max(0, game.player.hp - dmg)
+            game.toast_show(f"Ловушка! -{dmg} HP")
+            if game.player.hp <= 0:
+                game.toast_show("Ваносик пал!", 3.0)
+                game.reset(game.player.stats)
+
+    def draw(self, surf):
+        color = (170,130,90) if not self.used else (110,90,70)
+        pygame.draw.rect(surf, color, self.rect)
+        pygame.draw.rect(surf, (40,20,10), self.rect, 2)
+
 class RoomScene:
     def __init__(self, name):
         self.name = name
         self.doors = []
         self.notes = []
         self.npcs = []
+        self.objects = []
 
     def make_default_doors(self):
         neighbors = ROOMS[self.name]
@@ -1025,6 +1067,8 @@ class RoomScene:
             d.draw(surf)
         for n in self.notes:
             n.draw(surf)
+        for obj in self.objects:
+            obj.draw(surf)
         for npc in self.npcs:
             npc.draw(surf)
 
@@ -1335,6 +1379,10 @@ class Game:
         sc.make_default_doors()
         sc.notes = []
         sc.npcs = []
+        sc.objects = []
+        if random.random() < 0.5:
+            pos = (random.randint(160, WIDTH-160), random.randint(120, HEIGHT-120))
+            sc.objects.append(Desk(pos))
         if name == "Коридор":
             sc.npcs.append(NPC((WIDTH//2 + 140, HEIGHT//2),
                                 ["Здорова!", "Вот тебе полезная улика."],
@@ -1566,7 +1614,7 @@ class Game:
             return
         if self.state == "explore":
             self.player.update(dt, keys)
-            # взаимодействие — двери/улики/NPC
+            # взаимодействие — двери/улики/объекты/NPC
             if keys[pygame.K_e] and self.action_cd <= 0:
                 acted = False
                 for d in self.scene.doors:
@@ -1583,6 +1631,12 @@ class Game:
                             self.dialogue = Dialogue([n.text])
                             self.state = "dialogue"
                             self.toast_show("Улика подобрана (TAB — журнал)")
+                            acted = True
+                            break
+                if not acted:
+                    for obj in self.scene.objects:
+                        if not obj.used and self.player.rect.colliderect(obj.rect):
+                            obj.interact(self)
                             acted = True
                             break
                 if not acted:
@@ -1624,18 +1678,22 @@ class Game:
         surf.blit(self.player.image, self.player.rect)
         # Подсказки E
         if self.state == "explore":
-            for d in self.scene.doors:
-                if self.player.rect.colliderect(d.rect):
-                    s = text_with_outline("E — войти", font_small, (240,240,255), (0,0,0))
-                    surf.blit(s, (d.rect.centerx-40, d.rect.y-24))
-            for n in self.scene.notes:
-                if not n.picked and self.player.rect.colliderect(n.rect):
-                    s = text_with_outline("E — прочитать", font_small, (240,240,255), (0,0,0))
-                    surf.blit(s, (n.rect.centerx-50, n.rect.y-26))
-            for npc in self.scene.npcs:
-                if not npc.talked and self.player.rect.colliderect(npc.rect):
-                    s = text_with_outline("E — поговорить", font_small, (240,240,255), (0,0,0))
-                    surf.blit(s, (npc.rect.centerx-60, npc.rect.y-26))
+              for d in self.scene.doors:
+                  if self.player.rect.colliderect(d.rect):
+                      s = text_with_outline("E — войти", font_small, (240,240,255), (0,0,0))
+                      surf.blit(s, (d.rect.centerx-40, d.rect.y-24))
+              for n in self.scene.notes:
+                  if not n.picked and self.player.rect.colliderect(n.rect):
+                      s = text_with_outline("E — прочитать", font_small, (240,240,255), (0,0,0))
+                      surf.blit(s, (n.rect.centerx-50, n.rect.y-26))
+              for obj in self.scene.objects:
+                  if not obj.used and self.player.rect.colliderect(obj.rect):
+                      s = text_with_outline("E — обыскать", font_small, (240,240,255), (0,0,0))
+                      surf.blit(s, (obj.rect.centerx-55, obj.rect.y-26))
+              for npc in self.scene.npcs:
+                  if not npc.talked and self.player.rect.colliderect(npc.rect):
+                      s = text_with_outline("E — поговорить", font_small, (240,240,255), (0,0,0))
+                      surf.blit(s, (npc.rect.centerx-60, npc.rect.y-26))
 
         # Частицы
         particles.render(surf)
