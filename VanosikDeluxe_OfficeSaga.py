@@ -314,6 +314,49 @@ class Stats:
     endurance: int = 5
 
 
+class TurnManager:
+    """Управляет сменой ходов и очками действия."""
+
+    def __init__(self, player_ap: int = 2, enemy_ap: int = 1):
+        self.max_ap = {"player": player_ap, "enemy": enemy_ap}
+        self.ap = {"player": player_ap, "enemy": enemy_ap}
+        self.turn = "player"
+
+    def can_act(self) -> bool:
+        return self.ap[self.turn] > 0
+
+    def spend(self, points: int = 1) -> bool:
+        if self.ap[self.turn] >= points:
+            self.ap[self.turn] -= points
+            if self.ap[self.turn] <= 0:
+                self.end_turn()
+            return True
+        return False
+
+    def end_turn(self):
+        self.turn = "enemy" if self.turn == "player" else "player"
+        self.ap[self.turn] = self.max_ap[self.turn]
+
+    def reset(self):
+        self.ap = self.max_ap.copy()
+        self.turn = "player"
+
+
+def calc_hit_chance(attacker, defender):
+    """Вычисляет шанс попадания с учётом характеристик и навыков."""
+    chance = 0.75 + 0.03 * (attacker.stats.agility - defender.stats.agility)
+    chance += 0.02 * getattr(attacker, "damage_bonus", 0)
+    return max(0.1, min(0.95, chance))
+
+
+def calc_damage(attacker, defender):
+    """Расчёт урона с учётом силы и выносливости."""
+    base = attacker.attack_damage()
+    variance = random.randint(-2, 2)
+    reduction = defender.stats.endurance * 0.5
+    return max(1, int(base + variance - reduction))
+
+
 @dataclass
 class Skill:
     name: str
@@ -1081,7 +1124,7 @@ class Game:
         self.piz = None
         self.piz_move_t = MOVE_DELAY
         self.score = 0
-        self.turn = "player"
+        self.turn_mgr = TurnManager()
         self.fullscreen = False
         self.tab_open = False
         self.inv_open = False
@@ -1131,7 +1174,7 @@ class Game:
             boss = (self.round % 3 == 0)
             self.piz = Pizdyuk((WIDTH//2, HEIGHT//2-20), boss=boss)
             self.state = "combat"
-            self.turn = "player"
+            self.turn_mgr.reset()
             self.enemy_timer = 0.0
             self.toast_show("Ты нашёл Пиздюка!" + (" (БОСС)" if boss else ""))
 
@@ -1162,10 +1205,6 @@ class Game:
                 img = pygame.transform.flip(img, True, False)
             p.image = img
 
-    def start_enemy_turn(self):
-        self.turn = "enemy"
-        self.enemy_timer = 0.6
-
     def player_action(self, keys):
         p = self.player
         if self.action_cd <= 0:
@@ -1183,7 +1222,9 @@ class Game:
                 p.rect.y = max(80, min(HEIGHT - p.rect.h, p.rect.y + dy))
                 p._set_state("walk")
                 self.action_cd = ACTION_DELAY
-                self.start_enemy_turn()
+                if self.turn_mgr.spend():
+                    if self.turn_mgr.turn == "enemy":
+                        self.enemy_timer = 0.6
                 p._set_state("idle")
                 return
 
@@ -1192,13 +1233,12 @@ class Game:
             hb = p.get_attack_hitbox()
             hit = hb.colliderect(self.piz.rect)
             if hit:
-                if random.random() < 0.8:
+                if random.random() < calc_hit_chance(p, self.piz):
                     if snd_hit:
                         try: snd_hit.play()
                         except: pass
                     particles.spawn_hit(self.piz.rect.center, (255,200,60))
-                    base = p.attack_damage()
-                    dmg = random.randint(max(1, base-2), base+2)
+                    dmg = calc_damage(p, self.piz)
                     self.piz.hp = max(0, self.piz.hp - dmg)
                     k = Vector2(self.piz.rect.center) - Vector2(p.rect.center)
                     k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*p.damage_bonus)
@@ -1221,7 +1261,9 @@ class Game:
             p._hit_registered = True
             p.attacking_t = 0.0
             p._set_state("idle")
-            self.start_enemy_turn()
+            if self.turn_mgr.spend():
+                if self.turn_mgr.turn == "enemy":
+                    self.enemy_timer = 0.6
         elif keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
             if p.try_ult():
                 p.rage = 0; p.ult_cd = ULT_COOLDOWN
@@ -1243,9 +1285,12 @@ class Game:
                         return
                 flash_overlay.set_alpha(200)
                 particles.spawn_ult_ring(pc, (255,120,60))
-                self.start_enemy_turn()
+                if self.turn_mgr.spend() and self.turn_mgr.turn == "enemy":
+                    self.enemy_timer = 0.6
         elif keys[pygame.K_RETURN]:
-            self.start_enemy_turn()
+            self.turn_mgr.end_turn()
+            if self.turn_mgr.turn == "enemy":
+                self.enemy_timer = 0.6
 
     def handle_enemy_turn(self, dt):
         if self.enemy_timer > 0:
@@ -1255,9 +1300,8 @@ class Game:
                 return
         dist = Vector2(self.piz.rect.center).distance_to(self.player.rect.center)
         if dist <= ENEMY_ATTACK_RANGE:
-            if random.random() < 0.8:
-                base = self.piz.attack_damage()
-                dmg = random.randint(max(1, base-2), base+2)
+            if random.random() < calc_hit_chance(self.piz, self.player):
+                dmg = calc_damage(self.piz, self.player)
                 self.player.hp = max(0, self.player.hp - dmg)
                 self.toast_show(f"Пиздюк ударил (-{dmg} HP)")
                 if self.player.hp <= 0:
@@ -1268,7 +1312,7 @@ class Game:
                 self.toast_show("Пиздюк промахнулся")
         else:
             self.toast_show("Пиздюк не достал")
-        self.turn = "player"
+        self.turn_mgr.spend()
 
     def update(self, dt, keys):
         self.action_cd = max(0.0, self.action_cd - dt)
@@ -1353,7 +1397,7 @@ class Game:
                 self.change_piz_room()
 
         elif self.state == "combat":
-            if self.turn == "player":
+            if self.turn_mgr.turn == "player":
                 self.player_idle(dt)
                 self.player_action(keys)
             else:
@@ -1428,14 +1472,22 @@ class Game:
 
     def draw_hud(self, surf):
         # верхняя панель
-        pygame.draw.rect(surf, (0,0,0,120), (0,0,WIDTH,60))
+        pygame.draw.rect(surf, (0,0,0,120), (0,0,WIDTH,72))
         s1 = text_with_outline(f"Комната: {self.current_room}", font_big, (240,245,255), (0,0,0))
         surf.blit(s1, (16, 12))
         s2 = text_with_outline(f"Счёт: {self.score}", font_big, (240,245,255), (0,0,0))
         surf.blit(s2, (WIDTH - s2.get_width() - 16, 12))
         if self.state == "combat":
-            t = text_with_outline(f"Ход: {'Игрок' if self.turn == 'player' else 'Пиздюк'}", font_small, (240,245,255), (0,0,0))
+            turn = "Игрок" if self.turn_mgr.turn == "player" else "Пиздюк"
+            t = text_with_outline(f"Ход: {turn}", font_small, (240,245,255), (0,0,0))
             surf.blit(t, (WIDTH//2 - t.get_width()//2, 36))
+            ap_text = text_with_outline(
+                f"AP Игрок: {self.turn_mgr.ap['player']} | Пиздюк: {self.turn_mgr.ap['enemy']}",
+                font_small,
+                (240,245,255),
+                (0,0,0),
+            )
+            surf.blit(ap_text, (WIDTH//2 - ap_text.get_width()//2, 54))
 
         # нижний HUD
         draw_hp_bar(surf, self.player)
