@@ -49,6 +49,10 @@ ULT_DAMAGE = 45
 ULT_RADIUS = 130
 ULT_KNOCKBACK = 110
 
+# Дополнительные параметры RPG/пошагового боя
+BASE_PLAYER_HP = 100
+ENEMY_DAMAGE_BASE = 8
+
 # Boss
 BOSS_HP_MULT = 2.2
 BOSS_SPD_MULT = 1.25
@@ -301,6 +305,14 @@ class Inventory:
 
 
 @dataclass
+class Stats:
+    """Основные характеристики персонажа."""
+    strength: int = 5
+    agility: int = 5
+    endurance: int = 5
+
+
+@dataclass
 class Skill:
     name: str
     cost: int = 1
@@ -472,6 +484,11 @@ class Vanosik(pygame.sprite.Sprite):
         self.last_step_t = 0.0
         self._hit_registered = False
 
+        # Базовые характеристики и здоровье
+        self.stats = Stats()
+        self.hp_max = BASE_PLAYER_HP + self.stats.endurance * 10
+        self.hp = self.hp_max
+
         # RPG
         self.level = 1
         self.xp = 0
@@ -494,6 +511,10 @@ class Vanosik(pygame.sprite.Sprite):
     def recompute_stats(self):
         """Учитывает бонусы от инвентаря."""
         self.speed = self.base_speed + 14 * self.speed_bonus + self.inventory.bonus_speed()
+
+    def attack_damage(self):
+        base = DAMAGE_PER_HIT_BASE + self.stats.strength
+        return base + 2 * self.damage_bonus + self.inventory.bonus_damage()
 
     def _char_surface(self, body_color, shadow=True, punch=False, phase=0.0):
         surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
@@ -643,7 +664,8 @@ class Pizdyuk(pygame.sprite.Sprite):
         self.last_phrase = ""
         self.cry_timer = 0.0
         self.orbit_sign = random.choice([-1, 1])
-        self.hp_max = int(BASE_PIZDYUK_HP * (BOSS_HP_MULT if boss else 1.0))
+        self.stats = Stats(6, 4, 6) if boss else Stats(4, 3, 4)
+        self.hp_max = int(BASE_PIZDYUK_HP * (BOSS_HP_MULT if boss else 1.0)) + self.stats.endurance * 8
         self.hp = self.hp_max
 
     def _char_surface(self, base, hitc, hurt=False, phase=0.0):
@@ -742,6 +764,9 @@ class Pizdyuk(pygame.sprite.Sprite):
         if snd_cry:
             try: snd_cry.play()
             except: pass
+
+    def attack_damage(self):
+        return ENEMY_DAMAGE_BASE + self.stats.strength * 2
 
 # ====== Office map ======
 ROOMS = {
@@ -927,6 +952,15 @@ def draw_notes_log(surf, notes_log):
                 surf.blit(txt, (rect.x+16, y))
                 y += line_h
 
+def draw_hp_bar(surface, player):
+    label = text_with_outline("HP", font_small, (245,240,255), (0,0,0))
+    surface.blit(label, (16, HEIGHT - 108))
+    bar_w, bar_h = 180, 12; x, y = 16, HEIGHT - 98
+    draw_rounded_rect(surface, (x,y,bar_w,bar_h), (20,22,36), 6)
+    ratio = player.hp / max(1, player.hp_max)
+    draw_rounded_rect(surface, (x,y,int(bar_w*ratio),bar_h), (80,220,110), 6)
+
+
 def draw_rage_bar(surface, player):
     label = text_with_outline("Rage", font_small, (245,240,255), (0,0,0))
     surface.blit(label, (16, HEIGHT - 74))
@@ -1045,6 +1079,7 @@ class Game:
         self.piz = None
         self.piz_move_t = MOVE_DELAY
         self.score = 0
+        self.turn = "player"
         self.fullscreen = False
         self.tab_open = False
         self.inv_open = False
@@ -1093,6 +1128,7 @@ class Game:
             boss = (self.round % 3 == 0)
             self.piz = Pizdyuk((WIDTH//2, HEIGHT//2-20), boss=boss)
             self.state = "combat"
+            self.turn = "player"
             self.toast_show("Ты нашёл Пиздюка!" + (" (БОСС)" if boss else ""))
 
     def change_piz_room(self):
@@ -1186,53 +1222,72 @@ class Game:
                 self.change_piz_room()
 
         elif self.state == "combat":
-            self.player.update(dt, keys)
-            self.piz.update(dt, self.player.rect)
-            # Удар игрока
-            if keys[pygame.K_SPACE] and self.player.can_attack():
-                self.player.start_attack()
-            if self.player.attacking() and not self.player._hit_registered:
-                hb = self.player.get_attack_hitbox()
-                if hb.colliderect(self.piz.rect):
-                    if snd_hit:
-                        try: snd_hit.play()
-                        except: pass
-                    # particles
-                    particles.spawn_hit(self.piz.rect.center, (255,200,60))
-                    dmg = DAMAGE_PER_HIT_BASE + 2*self.player.damage_bonus + self.player.inventory.bonus_damage()
-                    self.piz.hp = max(0, self.piz.hp - dmg)
-                    k = Vector2(self.piz.rect.center) - Vector2(self.player.rect.center)
-                    k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*self.player.damage_bonus)
-                    if self.piz.is_boss: k *= BOSS_KB_RESIST
-                    self.piz.on_hit(k)
+            if self.turn == "player":
+                self.player.update(dt, keys)
+                if keys[pygame.K_SPACE] and self.player.can_attack():
+                    self.player.start_attack()
+                if self.player.attacking() and not self.player._hit_registered:
+                    hb = self.player.get_attack_hitbox()
+                    hit = hb.colliderect(self.piz.rect)
+                    if hit:
+                        if snd_hit:
+                            try: snd_hit.play()
+                            except: pass
+                        particles.spawn_hit(self.piz.rect.center, (255,200,60))
+                        dmg = self.player.attack_damage()
+                        self.piz.hp = max(0, self.piz.hp - dmg)
+                        k = Vector2(self.piz.rect.center) - Vector2(self.player.rect.center)
+                        k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*self.player.damage_bonus)
+                        if self.piz.is_boss: k *= BOSS_KB_RESIST
+                        self.piz.on_hit(k)
+                        self.score += BASE_POINTS
+                        leveled = self.player.add_xp(XP_PER_HIT)
+                        self.player.rage = min(RAGE_MAX, self.player.rage + RAGE_PER_HIT)
+                        if leveled:
+                            self.toast_show("Новый уровень! (1..4 — прокачка)", 1.8)
+                        if self.piz.hp <= 0:
+                            self.round += 1
+                            self.player.add_xp(XP_PER_LEVEL_CLEAR)
+                            self.state = "explore"; self.piz = None
+                            self.change_piz_room(); self.piz_move_t = MOVE_DELAY
+                            self.toast_show("Пиздюк повержен! Ищем дальше...")
                     self.player._hit_registered = True
                     self.player.attacking_t = 0.0
                     self.player._set_state("idle")
-                    self.score += BASE_POINTS
-                    leveled = self.player.add_xp(XP_PER_HIT)
-                    self.player.rage = min(RAGE_MAX, self.player.rage + RAGE_PER_HIT)
-                    if leveled: self.toast_show("Новый уровень! (1..4 — прокачка)", 1.8)
-                    if self.piz.hp <= 0:
-                        self.round += 1
-                        self.player.add_xp(XP_PER_LEVEL_CLEAR)
-                        self.state = "explore"; self.piz = None
-                        self.change_piz_room(); self.piz_move_t = MOVE_DELAY
-                        self.toast_show("Пиздюк повержен! Ищем дальше...")
-            # УЛЬТА
-            if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-                if self.player.try_ult():
-                    self.player.rage = 0; self.player.ult_cd = ULT_COOLDOWN
-                    ec = Vector2(self.piz.rect.center); pc = Vector2(self.player.rect.center)
-                    if ec.distance_to(pc) <= ULT_RADIUS:
-                        dmg = ULT_DAMAGE + 3*self.player.damage_bonus + self.player.inventory.bonus_damage()
-                        self.piz.hp = max(0, self.piz.hp - dmg)
-                        k = (ec - pc)
-                        k = (k.normalize() if k.length_squared() else Vector2(1,0)) * ULT_KNOCKBACK
-                        if self.piz.is_boss: k *= BOSS_KB_RESIST
-                        self.piz.on_hit(k)
-                        self.score += 60
-                    flash_overlay.set_alpha(200)
-                    particles.spawn_ult_ring(pc, (255,120,60))
+                    self.turn = "enemy"
+                elif keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
+                    if self.player.try_ult():
+                        self.player.rage = 0; self.player.ult_cd = ULT_COOLDOWN
+                        ec = Vector2(self.piz.rect.center); pc = Vector2(self.player.rect.center)
+                        if ec.distance_to(pc) <= ULT_RADIUS:
+                            dmg = ULT_DAMAGE + 3*self.player.damage_bonus + self.player.inventory.bonus_damage()
+                            self.piz.hp = max(0, self.piz.hp - dmg)
+                            k = (ec - pc)
+                            k = (k.normalize() if k.length_squared() else Vector2(1,0)) * ULT_KNOCKBACK
+                            if self.piz.is_boss: k *= BOSS_KB_RESIST
+                            self.piz.on_hit(k)
+                            self.score += 60
+                            if self.piz.hp <= 0:
+                                self.round += 1
+                                self.player.add_xp(XP_PER_LEVEL_CLEAR)
+                                self.state = "explore"; self.piz = None
+                                self.change_piz_room(); self.piz_move_t = MOVE_DELAY
+                                self.toast_show("Пиздюк повержен! Ищем дальше...")
+                        flash_overlay.set_alpha(200)
+                        particles.spawn_ult_ring(pc, (255,120,60))
+                        self.turn = "enemy"
+                elif keys[pygame.K_RETURN]:
+                    self.turn = "enemy"
+            else:
+                self.piz.update(dt, self.player.rect)
+                dmg = self.piz.attack_damage()
+                self.player.hp = max(0, self.player.hp - dmg)
+                self.toast_show(f"Пиздюк ударил (-{dmg} HP)")
+                if self.player.hp <= 0:
+                    self.toast_show("Ваносик пал!", 3.0)
+                    self.reset()
+                    return
+                self.turn = "player"
 
         if self.player.ult_cd > 0: self.player.ult_cd = max(0.0, self.player.ult_cd - dt)
         if self.toast_t > 0: self.toast_t -= dt
@@ -1308,8 +1363,12 @@ class Game:
         surf.blit(s1, (16, 12))
         s2 = text_with_outline(f"Счёт: {self.score}", font_big, (240,245,255), (0,0,0))
         surf.blit(s2, (WIDTH - s2.get_width() - 16, 12))
+        if self.state == "combat":
+            t = text_with_outline(f"Ход: {'Игрок' if self.turn == 'player' else 'Пиздюк'}", font_small, (240,245,255), (0,0,0))
+            surf.blit(t, (WIDTH//2 - t.get_width()//2, 36))
 
         # нижний HUD
+        draw_hp_bar(surf, self.player)
         draw_rage_bar(surf, self.player)
         draw_xp_bar(surf, self.player)
         draw_minimap(surf, self.current_room, self.piz_room)
