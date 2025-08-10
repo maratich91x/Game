@@ -1091,6 +1091,7 @@ class Game:
         self.dialogue = None
         self.current_npc = None
         self.action_cd = 0.0
+        self.enemy_timer = 0.0
         sword = Item("Степлер-меч", "weapon", damage=2)
         self.player.inventory.add(sword)
         self.player.inventory.equip(sword)
@@ -1129,6 +1130,7 @@ class Game:
             self.piz = Pizdyuk((WIDTH//2, HEIGHT//2-20), boss=boss)
             self.state = "combat"
             self.turn = "player"
+            self.enemy_timer = 0.0
             self.toast_show("Ты нашёл Пиздюка!" + (" (БОСС)" if boss else ""))
 
     def change_piz_room(self):
@@ -1138,6 +1140,102 @@ class Game:
         if old == self.current_room:
             pos = (random.randint(140, WIDTH-140), random.randint(120, HEIGHT-120))
             self.scene.notes.append(Note(pos, f"Меня тут нет! Пойду-ка в {self.piz_room}."))
+
+    def player_idle(self, dt):
+        p = self.player
+        if p.attack_cooldown > 0:
+            p.attack_cooldown = max(0.0, p.attack_cooldown - dt)
+        if p.attacking():
+            p.attacking_t -= dt
+            if p.attacking_t <= 0:
+                p._set_state("idle"); p._hit_registered = False
+        p.anim_t += dt
+        frames = p.images[p.state]
+        if frames:
+            frame_rate = 0.4 if p.state == "idle" else 0.08
+            if p.anim_t >= frame_rate:
+                p.anim_t = 0.0; p.anim_idx = (p.anim_idx + 1) % len(frames)
+            img = frames[p.anim_idx]
+            if p.dir.x < -0.2:
+                img = pygame.transform.flip(img, True, False)
+            p.image = img
+
+    def start_enemy_turn(self):
+        self.turn = "enemy"
+        self.enemy_timer = 0.6
+
+    def player_action(self, keys):
+        p = self.player
+        if keys[pygame.K_SPACE] and p.can_attack():
+            p.start_attack()
+            hb = p.get_attack_hitbox()
+            hit = hb.colliderect(self.piz.rect)
+            if hit:
+                if snd_hit:
+                    try: snd_hit.play()
+                    except: pass
+                particles.spawn_hit(self.piz.rect.center, (255,200,60))
+                dmg = p.attack_damage()
+                self.piz.hp = max(0, self.piz.hp - dmg)
+                k = Vector2(self.piz.rect.center) - Vector2(p.rect.center)
+                k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*p.damage_bonus)
+                if self.piz.is_boss: k *= BOSS_KB_RESIST
+                self.piz.on_hit(k)
+                self.score += BASE_POINTS
+                leveled = p.add_xp(XP_PER_HIT)
+                p.rage = min(RAGE_MAX, p.rage + RAGE_PER_HIT)
+                if leveled:
+                    self.toast_show("Новый уровень! (1..4 — прокачка)", 1.8)
+                if self.piz.hp <= 0:
+                    self.round += 1
+                    p.add_xp(XP_PER_LEVEL_CLEAR)
+                    self.state = "explore"; self.piz = None
+                    self.change_piz_room(); self.piz_move_t = MOVE_DELAY
+                    self.toast_show("Пиздюк повержен! Ищем дальше...")
+                    return
+            p._hit_registered = True
+            p.attacking_t = 0.0
+            p._set_state("idle")
+            self.start_enemy_turn()
+        elif keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
+            if p.try_ult():
+                p.rage = 0; p.ult_cd = ULT_COOLDOWN
+                ec = Vector2(self.piz.rect.center); pc = Vector2(p.rect.center)
+                if ec.distance_to(pc) <= ULT_RADIUS:
+                    dmg = ULT_DAMAGE + 3*p.damage_bonus + p.inventory.bonus_damage()
+                    self.piz.hp = max(0, self.piz.hp - dmg)
+                    k = (ec - pc)
+                    k = (k.normalize() if k.length_squared() else Vector2(1,0)) * ULT_KNOCKBACK
+                    if self.piz.is_boss: k *= BOSS_KB_RESIST
+                    self.piz.on_hit(k)
+                    self.score += 60
+                    if self.piz.hp <= 0:
+                        self.round += 1
+                        p.add_xp(XP_PER_LEVEL_CLEAR)
+                        self.state = "explore"; self.piz = None
+                        self.change_piz_room(); self.piz_move_t = MOVE_DELAY
+                        self.toast_show("Пиздюк повержен! Ищем дальше...")
+                        return
+                flash_overlay.set_alpha(200)
+                particles.spawn_ult_ring(pc, (255,120,60))
+                self.start_enemy_turn()
+        elif keys[pygame.K_RETURN]:
+            self.start_enemy_turn()
+
+    def handle_enemy_turn(self, dt):
+        if self.enemy_timer > 0:
+            self.piz.update(dt, self.player.rect)
+            self.enemy_timer -= dt
+            if self.enemy_timer > 0:
+                return
+        dmg = self.piz.attack_damage()
+        self.player.hp = max(0, self.player.hp - dmg)
+        self.toast_show(f"Пиздюк ударил (-{dmg} HP)")
+        if self.player.hp <= 0:
+            self.toast_show("Ваносик пал!", 3.0)
+            self.reset()
+            return
+        self.turn = "player"
 
     def update(self, dt, keys):
         self.action_cd = max(0.0, self.action_cd - dt)
@@ -1223,71 +1321,10 @@ class Game:
 
         elif self.state == "combat":
             if self.turn == "player":
-                self.player.update(dt, keys)
-                if keys[pygame.K_SPACE] and self.player.can_attack():
-                    self.player.start_attack()
-                if self.player.attacking() and not self.player._hit_registered:
-                    hb = self.player.get_attack_hitbox()
-                    hit = hb.colliderect(self.piz.rect)
-                    if hit:
-                        if snd_hit:
-                            try: snd_hit.play()
-                            except: pass
-                        particles.spawn_hit(self.piz.rect.center, (255,200,60))
-                        dmg = self.player.attack_damage()
-                        self.piz.hp = max(0, self.piz.hp - dmg)
-                        k = Vector2(self.piz.rect.center) - Vector2(self.player.rect.center)
-                        k = (k.normalize() if k.length_squared() else Vector2(1,0)) * (KNOCKBACK_PIX_BASE + 6*self.player.damage_bonus)
-                        if self.piz.is_boss: k *= BOSS_KB_RESIST
-                        self.piz.on_hit(k)
-                        self.score += BASE_POINTS
-                        leveled = self.player.add_xp(XP_PER_HIT)
-                        self.player.rage = min(RAGE_MAX, self.player.rage + RAGE_PER_HIT)
-                        if leveled:
-                            self.toast_show("Новый уровень! (1..4 — прокачка)", 1.8)
-                        if self.piz.hp <= 0:
-                            self.round += 1
-                            self.player.add_xp(XP_PER_LEVEL_CLEAR)
-                            self.state = "explore"; self.piz = None
-                            self.change_piz_room(); self.piz_move_t = MOVE_DELAY
-                            self.toast_show("Пиздюк повержен! Ищем дальше...")
-                    self.player._hit_registered = True
-                    self.player.attacking_t = 0.0
-                    self.player._set_state("idle")
-                    self.turn = "enemy"
-                elif keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-                    if self.player.try_ult():
-                        self.player.rage = 0; self.player.ult_cd = ULT_COOLDOWN
-                        ec = Vector2(self.piz.rect.center); pc = Vector2(self.player.rect.center)
-                        if ec.distance_to(pc) <= ULT_RADIUS:
-                            dmg = ULT_DAMAGE + 3*self.player.damage_bonus + self.player.inventory.bonus_damage()
-                            self.piz.hp = max(0, self.piz.hp - dmg)
-                            k = (ec - pc)
-                            k = (k.normalize() if k.length_squared() else Vector2(1,0)) * ULT_KNOCKBACK
-                            if self.piz.is_boss: k *= BOSS_KB_RESIST
-                            self.piz.on_hit(k)
-                            self.score += 60
-                            if self.piz.hp <= 0:
-                                self.round += 1
-                                self.player.add_xp(XP_PER_LEVEL_CLEAR)
-                                self.state = "explore"; self.piz = None
-                                self.change_piz_room(); self.piz_move_t = MOVE_DELAY
-                                self.toast_show("Пиздюк повержен! Ищем дальше...")
-                        flash_overlay.set_alpha(200)
-                        particles.spawn_ult_ring(pc, (255,120,60))
-                        self.turn = "enemy"
-                elif keys[pygame.K_RETURN]:
-                    self.turn = "enemy"
+                self.player_idle(dt)
+                self.player_action(keys)
             else:
-                self.piz.update(dt, self.player.rect)
-                dmg = self.piz.attack_damage()
-                self.player.hp = max(0, self.player.hp - dmg)
-                self.toast_show(f"Пиздюк ударил (-{dmg} HP)")
-                if self.player.hp <= 0:
-                    self.toast_show("Ваносик пал!", 3.0)
-                    self.reset()
-                    return
-                self.turn = "player"
+                self.handle_enemy_turn(dt)
 
         if self.player.ult_cd > 0: self.player.ult_cd = max(0.0, self.player.ult_cd - dt)
         if self.toast_t > 0: self.toast_t -= dt
