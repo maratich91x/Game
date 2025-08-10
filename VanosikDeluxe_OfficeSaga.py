@@ -482,8 +482,11 @@ class SkillTree:
 
 
 class Quest:
-    def __init__(self, desc):
+    def __init__(self, desc, goal=1, reward=0):
         self.desc = desc
+        self.goal = goal
+        self.progress = 0
+        self.reward = reward
         self.completed = False
 
 
@@ -1444,6 +1447,16 @@ class Game:
     def toast_show(self, text, t=2.2):
         self.toast, self.toast_t = text, t
 
+    def update_quest_progress(self, desc, amount=1):
+        for q in self.quests:
+            if q.desc == desc and not q.completed:
+                q.progress = min(q.goal, q.progress + amount)
+                if q.progress >= q.goal:
+                    q.completed = True
+                    self.score += q.reward
+                    self.toast_show(f"Квест завершён: {q.desc}")
+                break
+
     def enter_room(self, name):
         self.current_room = name
         self.scene = self.build_room(name)
@@ -1619,9 +1632,10 @@ class Game:
                                 npc = self.current_npc
                                 self.current_npc = None
                                 if npc.quest_desc:
-                                    self.quests.append(Quest(npc.quest_desc))
+                                    q = Quest(npc.quest_desc, goal=1, reward=npc.reward)
+                                    self.quests.append(q)
                                     self.notes_log.append(npc.quest_desc)
-                                    self.score += npc.reward
+                                    self.update_quest_progress(npc.quest_desc)
                                 npc.talked = True
                                 self.toast_show("Улика добавлена")
                             self.state = "explore"; self.dialogue = None
@@ -1676,7 +1690,9 @@ class Game:
                         if not n.picked and self.player.rect.colliderect(n.rect):
                             n.picked = True
                             self.notes_log.append(n.text)
-                            self.quests.append(Quest(n.text))
+                            q = Quest(n.text, goal=1, reward=0)
+                            self.quests.append(q)
+                            self.update_quest_progress(n.text)
                             self.dialogue = Dialogue([n.text])
                             self.state = "dialogue"
                             self.toast_show("Улика подобрана (TAB — журнал)")
@@ -1801,6 +1817,13 @@ class Game:
                 (0,0,0),
             )
             surf.blit(ap_text, (WIDTH//2 - ap_text.get_width()//2, 54))
+        # список активных квестов
+        y = 80
+        for q in self.quests:
+            status = "Готово" if q.completed else f"{q.progress}/{q.goal}"
+            txt = font_small.render(f"{q.desc} [{status}]", True, (240,245,255))
+            surf.blit(txt, (16, y))
+            y += font_small.get_height() + 2
 
         # нижний HUD
         draw_hp_bar(surf, self.player)
