@@ -289,15 +289,41 @@ class Item:
 
 
 @dataclass
+class Weapon:
+    """Оружие ближнего или дальнего боя."""
+    name: str
+    wtype: str  # melee | ranged
+    damage: int
+    range: int
+    ap_cost: int = 1
+
+
+@dataclass
 class Inventory:
     items: list[Item] = field(default_factory=list)
     equipped: dict[str, Item] = field(default_factory=dict)
+    weapons: list[Weapon] = field(default_factory=list)
+    current_weapon_idx: int = 0
 
     def add(self, item: Item):
         self.items.append(item)
 
     def equip(self, item: Item):
         self.equipped[item.type] = item
+
+    def add_weapon(self, weapon: Weapon):
+        """Добавить новое оружие в инвентарь."""
+        self.weapons.append(weapon)
+        if len(self.weapons) == 1:
+            self.current_weapon_idx = 0
+
+    def current_weapon(self) -> Weapon | None:
+        return self.weapons[self.current_weapon_idx] if self.weapons else None
+
+    def switch_weapon(self):
+        if self.weapons:
+            self.current_weapon_idx = (self.current_weapon_idx + 1) % len(self.weapons)
+        return self.current_weapon()
 
     def bonus_damage(self):
         return sum(i.damage for i in self.equipped.values())
@@ -564,6 +590,8 @@ class Vanosik(pygame.sprite.Sprite):
 
         # Новые системы
         self.inventory = Inventory()
+        # стартовое оружие
+        self.inventory.add_weapon(Weapon("Плеть из пачкордов", "melee", damage=12, range=32, ap_cost=1))
         self.skills = SkillTree()
         self.recompute_stats()
 
@@ -572,7 +600,8 @@ class Vanosik(pygame.sprite.Sprite):
         self.speed = self.base_speed + 14 * self.speed_bonus + self.inventory.bonus_speed()
 
     def attack_damage(self):
-        base = DAMAGE_PER_HIT_BASE + self.stats.strength
+        weapon = self.inventory.current_weapon()
+        base = self.stats.strength + (weapon.damage if weapon else DAMAGE_PER_HIT_BASE)
         return base + 2 * self.damage_bonus + self.inventory.bonus_damage()
 
     def _char_surface(self, body_color, shadow=True, punch=False, phase=0.0):
@@ -625,6 +654,7 @@ class Vanosik(pygame.sprite.Sprite):
             frames = self.images[self.state]
             self.image = frames[0] if frames else self.image
 
+
     def update(self, dt, keys):
         if self.ult_cd > 0: self.ult_cd = max(0.0, self.ult_cd - dt)
         self.recompute_stats()
@@ -667,12 +697,15 @@ class Vanosik(pygame.sprite.Sprite):
                 self._set_state("idle"); self._hit_registered = False
 
     def can_attack(self):
-        return self.attack_cooldown <= 0.0 and not self.attacking()
+        return self.attack_cooldown <= 0.0 and not self.attacking() and self.inventory.current_weapon() is not None
 
     def start_attack(self):
+        weapon = self.inventory.current_weapon()
+        if not weapon:
+            return
         self._set_state("attack")
-        self.attacking_t = self.attack_time
-        self.attack_cd_total = max(0.18, 0.45 - 0.05*self.cd_bonus)
+        self.attacking_t = 0.25 if weapon.wtype == "ranged" else 0.2
+        self.attack_cd_total = max(0.18, 0.45 + 0.1*(weapon.ap_cost-1) - 0.05*self.cd_bonus)
         self.attack_cooldown = self.attack_cd_total
         self._hit_registered = False
 
@@ -681,9 +714,11 @@ class Vanosik(pygame.sprite.Sprite):
 
     def get_attack_hitbox(self):
         d = self.dir if self.dir.length_squared() > 0 else pygame.Vector2(1, 0)
-        base_w, base_h = 28, 24
+        weapon = self.inventory.current_weapon()
+        base = weapon.range if weapon else 28
         extra = 6 * self.range_bonus
-        w, h = base_w + extra, base_h + extra//2
+        w = base + extra
+        h = int(base * 0.8) + extra // 2
         cx, cy = self.rect.center
         if abs(d.x) >= abs(d.y):
             return pygame.Rect(cx + (12 if d.x>=0 else -12 - w), cy - h//2, w, h)
@@ -727,6 +762,14 @@ class Pizdyuk(pygame.sprite.Sprite):
         self.stats = Stats(6, 4, 6) if boss else Stats(4, 3, 4)
         self.hp_max = int(BASE_PIZDYUK_HP * (BOSS_HP_MULT if boss else 1.0)) + self.stats.endurance * 8
         self.hp = self.hp_max
+        # оружие ИИ
+        self.weapons = [
+            Weapon("Офисный нож", "melee", damage=8, range=80, ap_cost=1),
+            Weapon("Резиновый степлер", "ranged", damage=6, range=160, ap_cost=1)
+        ]
+        if self.is_boss:
+            self.weapons.append(Weapon("Лазерный указатель", "ranged", damage=10, range=200, ap_cost=2))
+        self.weapon = random.choice(self.weapons)
 
     def _char_surface(self, base, hitc, hurt=False, phase=0.0):
         surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
@@ -768,6 +811,17 @@ class Pizdyuk(pygame.sprite.Sprite):
             self.state = st; self.anim_idx = 0; self.anim_t = 0.0
             frames = self.images[self.state]
             self.image = frames[0] if frames else self.image
+
+    def select_weapon(self, dist: float):
+        """Выбор оружия в зависимости от дистанции."""
+        ranged = [w for w in self.weapons if w.wtype == "ranged"]
+        melee = [w for w in self.weapons if w.wtype == "melee"]
+        if dist > 100 and ranged:
+            self.weapon = ranged[0]
+        elif melee:
+            self.weapon = melee[0]
+        elif ranged:
+            self.weapon = ranged[0]
 
     def update(self, dt, player_rect):
         if self.state == "hit":
@@ -826,7 +880,9 @@ class Pizdyuk(pygame.sprite.Sprite):
             except: pass
 
     def attack_damage(self):
-        return ENEMY_DAMAGE_BASE + self.stats.strength * 2
+        weapon = self.weapon
+        base = self.stats.strength + (weapon.damage if weapon else ENEMY_DAMAGE_BASE)
+        return base
 
 # ====== Office map ======
 ROOMS = {
@@ -1321,6 +1377,10 @@ class Game:
                 return
 
         if keys[pygame.K_SPACE] and p.can_attack():
+            weapon = p.inventory.current_weapon()
+            cost = weapon.ap_cost if weapon else 1
+            if not self.turn_mgr.spend(cost):
+                return
             p.start_attack()
             hb = p.get_attack_hitbox()
             hit = hb.colliderect(self.piz.rect)
@@ -1346,6 +1406,10 @@ class Game:
                         leveled2 = p.add_xp(XP_PER_LEVEL_CLEAR)
                         if leveled2:
                             show_level_up_menu(p)
+                        # добыча оружия
+                        if self.piz.weapon:
+                            p.inventory.add_weapon(self.piz.weapon)
+                            self.toast_show(f"Получено оружие: {self.piz.weapon.name}")
                         self.state = "explore"; self.piz = None
                         self.change_piz_room(); self.piz_move_t = MOVE_DELAY
                         self.toast_show("Пиздюк повержен! Ищем дальше...")
@@ -1355,9 +1419,8 @@ class Game:
             p._hit_registered = True
             p.attacking_t = 0.0
             p._set_state("idle")
-            if self.turn_mgr.spend():
-                if self.turn_mgr.turn == "enemy":
-                    self.enemy_timer = 0.6
+            if self.turn_mgr.turn == "enemy":
+                self.enemy_timer = 0.6
         elif keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
             if p.try_ult():
                 p.rage = 0; p.ult_cd = ULT_COOLDOWN
@@ -1395,7 +1458,9 @@ class Game:
             if self.enemy_timer > 0:
                 return
         dist = Vector2(self.piz.rect.center).distance_to(self.player.rect.center)
-        if dist <= ENEMY_ATTACK_RANGE:
+        self.piz.select_weapon(dist)
+        rng = self.piz.weapon.range if self.piz.weapon else ENEMY_ATTACK_RANGE
+        if dist <= rng:
             if random.random() < calc_hit_chance(self.piz, self.player):
                 dmg = calc_damage(self.piz, self.player)
                 self.player.hp = max(0, self.player.hp - dmg)
@@ -1408,7 +1473,9 @@ class Game:
                 self.toast_show("Пиздюк промахнулся")
         else:
             self.toast_show("Пиздюк не достал")
-        self.turn_mgr.spend()
+        cost = self.piz.weapon.ap_cost if self.piz.weapon else 1
+        if not self.turn_mgr.spend(cost):
+            return
 
     def update(self, dt, keys):
         self.action_cd = max(0.0, self.action_cd - dt)
@@ -1451,6 +1518,10 @@ class Game:
                     if self.player.skill_points > 0:
                         keymap = {pygame.K_1:"damage", pygame.K_2:"speed", pygame.K_3:"cooldown", pygame.K_4:"range"}
                         self.player.skills.unlock(keymap[e.key], self.player)
+                elif e.key == pygame.K_q:
+                    w = self.player.inventory.switch_weapon()
+                    if w:
+                        self.toast_show(f"Экипировано: {w.name}")
 
         if self.state == "dialogue":
             return
